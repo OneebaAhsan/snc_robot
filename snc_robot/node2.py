@@ -225,92 +225,181 @@ class HazardMarkerDetector(Node):
             
             # === Homography matrix calculation ===
             homography_matrix = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
+            self.get_logger().info(f"Homography matrix: {homography_matrix}")
+            
+            # Calculate the center point of the object in normalized coordinates
             homogeneous_coords = np.dot(homography_matrix, np.array([0, 0, 1]))
-
-            # Normalize
-            pixel_x_norm = homogeneous_coords[0] / homogeneous_coords[2]
-            pixel_y_norm = homogeneous_coords[1] / homogeneous_coords[2]
-
-            # Scale to real pixel coordinates
-            if self.last_depth_image is not None:
-                h, w = self.last_depth_image.shape[:2]
-                pixel_x = int(pixel_x_norm * w)
-                pixel_y = int(pixel_y_norm * h)
+            self.get_logger().info(f"Homogeneous coords: {homogeneous_coords}")
+            
+            # Get the image dimensions
+            if self.camera_intrinsics is None:
+                self.get_logger().error("Camera intrinsics not available!")
+                continue
+                
+            width = self.camera_intrinsics['width']
+            height = self.camera_intrinsics['height']
+            self.get_logger().info(f"Image dimensions: {width}x{height}")
+            
+            # Normalize coordinates properly
+            if homogeneous_coords[2] != 0:  # Avoid division by zero
+                pixel_x_norm = homogeneous_coords[0] / homogeneous_coords[2]
+                pixel_y_norm = homogeneous_coords[1] / homogeneous_coords[2]
+                
+                pixel_x = int(pixel_x_norm)
+                pixel_y = int(pixel_y_norm)
+                
+                # Ensure the pixel is within image bounds
+                pixel_x = max(0, min(width-1, pixel_x))
+                pixel_y = max(0, min(height-1, pixel_y))
+                
+                self.get_logger().info(f"Detected object at pixel: ({pixel_x}, {pixel_y})")
             else:
-                self.get_logger().error("No depth image available yet!")
+                self.get_logger().error("Invalid homogeneous coordinates (division by zero)")
                 continue
 
-            self.get_logger().info(f"Detected object at pixel: ({pixel_x}, {pixel_y})")
-
             # === 3D position estimation ===
+            if pixel_x < 10 and pixel_y < 10:  # If still near (0,0), check the logs
+                pixel_x = int(width // 2)
+                pixel_y = int(height // 2)
+                self.get_logger().info(f"Using fallback pixel position: ({pixel_x}, {pixel_y})")
+
+            # Attempt to estimate 3D position
             position_camera = self.estimate_3d_position(pixel_x, pixel_y, msg.header)
             
             if position_camera:
                 try:
+                    # Create a point stamped message
+                    point_stamped = PointStamped()
+                    point_stamped.header.frame_id = self.camera_optical_frame
+                    point_stamped.header.stamp = self.get_clock().now().to_msg()
+                    point_stamped.point = position_camera
+                    
+                    self.get_logger().info(f"Looking up transform from {self.camera_optical_frame} to {self.map_frame}")
+                    
                     # Transform from camera frame to map frame
-                    position_map = self.tf_buffer.transform(
-                        PointStamped(header=Header(frame_id="camera_link"), point=position_camera),
-                        "map",
-                        timeout=Duration(seconds=0.5)
-                    )
-
-                    self.get_logger().info(f"Transformed 3D position in map frame: {position_map}")
-
-                    # ✅ Save hazard marker using the correct function
-                    self.save_hazard_marker_position(object_id, hazard_name, position_map.point)
+                    map_point = self.transform_to_map(position_camera, msg.header)
+                    
+                    if map_point:
+                        self.get_logger().info(f"Transformed 3D position in map frame: {map_point}")
+                        
+                        # Save hazard marker position and publish marker
+                        self.save_hazard_marker_position(object_id, hazard_name, map_point)
+                        self.publish_marker(map_point, object_id, hazard_name)
+                    else:
+                        self.get_logger().error("Failed to transform point to map frame")
 
                 except Exception as e:
                     self.get_logger().error(f"Error transforming point to map frame: {e}")
                     self.publish_status(f"Detected {hazard_name} but error transforming to map frame")
-
             else:
                 self.get_logger().warning(f"Could not estimate 3D position for object ID {object_id}")
+    
+    # def find_object_callback(self, msg):
+    #     """
+    #     Callback for find_object_2d detections.
+    #     Extracts object coordinates, estimates 3D position, transforms to map frame, and publishes the hazard marker.
+    #     """
+    #     if not msg.objects.data:
+    #         self.get_logger().info("Empty detection message received.")
+    #         self.publish_status("No hazards detected")
+    #         return
 
+    #     self.get_logger().info(f"Received {len(msg.objects.data) // 12} objects detected!")
+        
+    #     for i in range(0, len(msg.objects.data), 12):
+    #         object_id = int(msg.objects.data[i])
+    #         self.get_logger().info(f"Processing object with ID: {object_id}")
 
-        """
-        for i in range(0, len(msg.objects.data), 12):
-            object_id = int(msg.objects.data[i])
-            self.get_logger().info(f"Processing object with ID: {object_id}")
-
-            h = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
-            self.get_logger().info(f"Homography matrix: {h}")
-
-            px_homo = np.dot(h, np.array([0, 0, 1]))
-            self.get_logger().info(f"Homogeneous coords: {px_homo}")
+    #         hazard_name = HAZARD_ID_TO_NAME.get(object_id, "Unknown")
             
-            pixel_x = px_homo[0] / px_homo[2]
-            pixel_y = px_homo[1] / px_homo[2]
-            self.get_logger().info(f"Detected object at pixel: ({pixel_x}, {pixel_y})")
+    #         # === Homography matrix calculation ===
+    #         homography_matrix = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
+    #         homogeneous_coords = np.dot(homography_matrix, np.array([0, 0, 1]))
 
-            # 🔵 Always extract hazard name early
-            hazard_id = msg.objects.data[i]
-            hazard_name = HAZARD_ID_TO_NAME.get(hazard_id, "Unknown")
+    #         # Normalize
+    #         pixel_x_norm = homogeneous_coords[0] / homogeneous_coords[2]
+    #         pixel_y_norm = homogeneous_coords[1] / homogeneous_coords[2]
 
-            # Estimate 3D point
-            point_camera = self.estimate_3d_position(int(pixel_x), int(pixel_y), msg.header)
+    #         # Scale to real pixel coordinates
+    #         if self.last_depth_image is not None:
+    #             h, w = self.last_depth_image.shape[:2]
+    #             pixel_x = int(pixel_x_norm * w)
+    #             pixel_y = int(pixel_y_norm * h)
+    #         else:
+    #             self.get_logger().error("No depth image available yet!")
+    #             continue
+
+    #         self.get_logger().info(f"Detected object at pixel: ({pixel_x}, {pixel_y})")
+
+    #         # === 3D position estimation ===
+    #         position_camera = self.estimate_3d_position(pixel_x, pixel_y, msg.header)
             
-            if point_camera:
-                self.get_logger().info(f"Estimated 3D position in camera frame: {point_camera}")
-                try:
-                    point_map = self.tf_buffer.transform(
-                        PointStamped(header=Header(frame_id="camera_link"), point=point_camera),
-                        "map",
-                        timeout=Duration(seconds=0.5)
-                    )
-                    self.get_logger().info(f"Transformed 3D position in map frame: {point_map}")
+    #         if position_camera:
+    #             try:
+    #                 # Transform from camera frame to map frame
+    #                 position_map = self.tf_buffer.transform(
+    #                     PointStamped(header=Header(frame_id="camera_link"), point=position_camera),
+    #                     "map",
+    #                     timeout=Duration(seconds=0.5)
+    #                 )
 
-                    # Save the hazard marker
-                    # self.save_hazard_marker(hazard_name, point_map.point)
-                    self.save_hazard_marker_position(hazard_id, hazard_name, point_map.point)
+    #                 self.get_logger().info(f"Transformed 3D position in map frame: {position_map}")
 
-                except Exception as e:
-                    self.get_logger().error(f"Error transforming point to map frame: {e}")
-                    self.publish_status(f"Detected {hazard_name} but error transforming to map frame")
+    #                 # ✅ Save hazard marker using the correct function
+    #                 self.save_hazard_marker_position(object_id, hazard_name, position_map.point)
 
-            else:
-                self.get_logger().warning(f"Could not estimate 3D position for object {i // 12 + 1}.")
-                self.publish_status(f"Detected {hazard_name} but could not determine position")
-        """
+    #             except Exception as e:
+    #                 self.get_logger().error(f"Error transforming point to map frame: {e}")
+    #                 self.publish_status(f"Detected {hazard_name} but error transforming to map frame")
+
+    #         else:
+    #             self.get_logger().warning(f"Could not estimate 3D position for object ID {object_id}")
+
+
+    #     """
+    #     for i in range(0, len(msg.objects.data), 12):
+    #         object_id = int(msg.objects.data[i])
+    #         self.get_logger().info(f"Processing object with ID: {object_id}")
+
+    #         h = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
+    #         self.get_logger().info(f"Homography matrix: {h}")
+
+    #         px_homo = np.dot(h, np.array([0, 0, 1]))
+    #         self.get_logger().info(f"Homogeneous coords: {px_homo}")
+            
+    #         pixel_x = px_homo[0] / px_homo[2]
+    #         pixel_y = px_homo[1] / px_homo[2]
+    #         self.get_logger().info(f"Detected object at pixel: ({pixel_x}, {pixel_y})")
+
+    #         # 🔵 Always extract hazard name early
+    #         hazard_id = msg.objects.data[i]
+    #         hazard_name = HAZARD_ID_TO_NAME.get(hazard_id, "Unknown")
+
+    #         # Estimate 3D point
+    #         point_camera = self.estimate_3d_position(int(pixel_x), int(pixel_y), msg.header)
+            
+    #         if point_camera:
+    #             self.get_logger().info(f"Estimated 3D position in camera frame: {point_camera}")
+    #             try:
+    #                 point_map = self.tf_buffer.transform(
+    #                     PointStamped(header=Header(frame_id="camera_link"), point=point_camera),
+    #                     "map",
+    #                     timeout=Duration(seconds=0.5)
+    #                 )
+    #                 self.get_logger().info(f"Transformed 3D position in map frame: {point_map}")
+
+    #                 # Save the hazard marker
+    #                 # self.save_hazard_marker(hazard_name, point_map.point)
+    #                 self.save_hazard_marker_position(hazard_id, hazard_name, point_map.point)
+
+    #             except Exception as e:
+    #                 self.get_logger().error(f"Error transforming point to map frame: {e}")
+    #                 self.publish_status(f"Detected {hazard_name} but error transforming to map frame")
+
+    #         else:
+    #             self.get_logger().warning(f"Could not estimate 3D position for object {i // 12 + 1}.")
+    #             self.publish_status(f"Detected {hazard_name} but could not determine position")
+    #     """
 
     # def save_hazard_marker_position(self, hazard_id, hazard_name, position):
     #     """
