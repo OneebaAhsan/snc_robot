@@ -260,10 +260,58 @@ class HazardMarkerDetector(Node):
                 self.publish_status(f"Detected {hazard_name} but could not determine position")
 
 
+    # def save_hazard_marker_position(self, hazard_id, hazard_name, position):
+    #     """
+    #     Publishes the hazard marker position to a topic that can be echoed.
+    #     """
+    #     # create a unique key for the hazard (could be based on position and ID)
+    #     marker_key = f"{hazard_id}"
+        
+    #     # check if we've already detected this hazard (using approximate position)
+    #     already_detected = False
+    #     for key, pos in self.detected_hazards.items():
+    #         if key == marker_key:
+    #             # check if the positions are similar (within 0.2m)
+    #             dist = math.sqrt((pos[0] - position.x)**2 + 
+    #                              (pos[1] - position.y)**2 + 
+    #                              (pos[2] - position.z)**2)
+    #             if dist < 0.2:  # already detected within 20cm
+    #                 already_detected = True
+    #                 break
+        
+    #     # create the formatted data string for the coordinate
+    #     coord_str = f"ID: {hazard_id}, {hazard_name}, x: {position.x:.4f}, y: {position.y:.4f}, z: {position.z:.4f}"
+        
+    #     # always publish to topic for real-time access
+    #     coord_msg = String()
+    #     coord_msg.data = coord_str
+    #     self.coords_publisher.publish(coord_msg)
+        
+    #     # if new detection, save it 
+    #     if not already_detected:
+    #         # store in detected hazards dictionary
+    #         self.detected_hazards[marker_key] = (position.x, position.y, position.z)
+            
+    #         # print to terminal with more visibility
+    #         terminal_output = f"NEW HAZARD MARKER DETECTED - ID: {hazard_id} ({hazard_name}) at position: x={position.x:.4f}, y={position.y:.4f}, z={position.z:.4f}"
+    #         print("\n" + "="*80)
+    #         print(terminal_output)
+    #         print("="*80 + "\n")
+    #         self.get_logger().info(f"New hazard detected: {coord_str}")
+    #     else:
+    #         # log continued visibility of already detected hazard
+    #         self.get_logger().debug(f"Already detected hazard seen again: {coord_str}")
+
     def save_hazard_marker_position(self, hazard_id, hazard_name, position):
         """
         Publishes the hazard marker position to a topic that can be echoed.
         """
+
+        # Check if position is None
+        if position is None:
+            self.get_logger().warning(f"Cannot save hazard marker for ID {hazard_id}: 3D position estimation failed.")
+            return  # Stop here if position is not valid
+
         # create a unique key for the hazard (could be based on position and ID)
         marker_key = f"{hazard_id}"
         
@@ -273,12 +321,12 @@ class HazardMarkerDetector(Node):
             if key == marker_key:
                 # check if the positions are similar (within 0.2m)
                 dist = math.sqrt((pos[0] - position.x)**2 + 
-                                 (pos[1] - position.y)**2 + 
-                                 (pos[2] - position.z)**2)
+                                (pos[1] - position.y)**2 + 
+                                (pos[2] - position.z)**2)
                 if dist < 0.2:  # already detected within 20cm
                     already_detected = True
                     break
-        
+
         # create the formatted data string for the coordinate
         coord_str = f"ID: {hazard_id}, {hazard_name}, x: {position.x:.4f}, y: {position.y:.4f}, z: {position.z:.4f}"
         
@@ -289,18 +337,16 @@ class HazardMarkerDetector(Node):
         
         # if new detection, save it 
         if not already_detected:
-            # store in detected hazards dictionary
             self.detected_hazards[marker_key] = (position.x, position.y, position.z)
-            
-            # print to terminal with more visibility
+
             terminal_output = f"NEW HAZARD MARKER DETECTED - ID: {hazard_id} ({hazard_name}) at position: x={position.x:.4f}, y={position.y:.4f}, z={position.z:.4f}"
             print("\n" + "="*80)
             print(terminal_output)
             print("="*80 + "\n")
             self.get_logger().info(f"New hazard detected: {coord_str}")
         else:
-            # log continued visibility of already detected hazard
             self.get_logger().debug(f"Already detected hazard seen again: {coord_str}")
+
 
     def estimate_3d_position(self, pixel_x: int, pixel_y: int, header: Header) -> Union[Point, None]:
         """
