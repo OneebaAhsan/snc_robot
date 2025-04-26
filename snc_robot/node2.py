@@ -205,11 +205,11 @@ class HazardMarkerDetector(Node):
     #         num_objects = len(msg.objects.data) // 12 
     #         self.get_logger().info(f"  Message contained {num_objects} detected object(s).")
 
-
     def find_object_callback(self, msg):
         """
         Callback for find_object_2d detections.
-        Extracts object coordinates, estimates 3D position, transforms to map frame, and publishes the hazard marker.
+        Extracts object coordinates, estimates 3D position using multiple position attempts,
+        transforms to map frame, and publishes the hazard marker.
         """
         if not msg.objects.data:
             self.get_logger().info("Empty detection message received.")
@@ -224,93 +224,65 @@ class HazardMarkerDetector(Node):
             
             self.get_logger().info(f"Processing object with ID: {object_id}")
             
-            # Extract the homography matrix for this object
-            homography_matrix = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
-            self.get_logger().info(f"Homography matrix: {homography_matrix}")
+            # Skip homography-based pixel calculation completely
             
-            # IMPORTANT: Proper extraction of pixel coordinates from homography matrix
-            # The homography matrix maps from object coordinates to image coordinates
-            
-            # For find_object_2d, the object center is at (0,0,1) in homogeneous coordinates
-            # We need to extract translation elements (3rd column) and scale by the homogeneous factor
-            
+            # Get image dimensions from camera intrinsics
             if self.camera_intrinsics is None:
                 self.get_logger().error("Camera intrinsics not available!")
                 continue
                 
-            # Get image dimensions
             width = int(self.camera_intrinsics['width'])
             height = int(self.camera_intrinsics['height'])
             
-            # Construct a proper coordinate for the object in 3D space (in the camera frame)
-            # Based on testing, find_object_2d's comments suggest that the object is at (355, 235) 
-            # according to the warning message in your logs
-            pixel_x = int(homography_matrix[0, 2] * width / homography_matrix[2, 2])
-            pixel_y = int(homography_matrix[1, 2] * height / homography_matrix[2, 2])
+            # Try multiple positions in the image where depth might be valid
+            # These positions are strategically chosen to be in areas where
+            # the depth sensor is more likely to have valid data
             
-            # Ensure values are within the image bounds
-            pixel_x = max(0, min(width-1, pixel_x))
-            pixel_y = max(0, min(height-1, pixel_y))
+            # Create a list of positions to try, starting from center and working outward
+            positions_to_try = [
+                (width // 2, height // 2),               # Center of image
+                (width // 2, height // 3),               # Upper-middle
+                (width // 3, height // 2),               # Middle-left
+                (2 * width // 3, height // 2),           # Middle-right
+                (width // 4, height // 4),               # Upper-left quadrant
+                (3 * width // 4, height // 4),           # Upper-right quadrant
+                (width // 4, 3 * height // 4),           # Lower-left quadrant
+                (3 * width // 4, 3 * height // 4),       # Lower-right quadrant
+                (width // 2, height // 4),               # Top middle
+                (width // 2, 3 * height // 4),           # Bottom middle
+            ]
             
-            # If the calculated pixel coordinates are still near (0,0), use a fixed position
-            if pixel_x < 10 and pixel_y < 10:
-                # The homography matrix might be in normalized coordinates (0-1)
-                # Try a different interpretation
-                self.get_logger().warn(f"Calculated coordinates too close to origin: ({pixel_x}, {pixel_y})")
+            position_camera = None
+            used_position = None
+            
+            # Try each position until we find one with valid depth
+            for pixel_x, pixel_y in positions_to_try:
+                self.get_logger().info(f"Trying pixel position: ({pixel_x}, {pixel_y})")
                 
-                # Try extracting coordinates differently
-                # Some implementations use the homography matrix differently
-                try:
-                    # Check the first values in the homography - they might be the image width
-                    if homography_matrix[0, 0] > 100:  # If it's a large value like 800
-                        self.get_logger().info(f"Homography appears to contain image width: {homography_matrix[0, 0]}")
-                        # Try different combinations from the homography
-                        candidates = [
-                            (homography_matrix[0, 2], homography_matrix[1, 2]),  # Direct translation
-                            (homography_matrix[2, 0], homography_matrix[2, 1]),  # Bottom row
-                            (homography_matrix[0, 2] / homography_matrix[2, 2], 
-                            homography_matrix[1, 2] / homography_matrix[2, 2])  # Normalized
-                        ]
-                        
-                        # Log all candidates
-                        for idx, (x, y) in enumerate(candidates):
-                            self.get_logger().info(f"Coordinate candidate {idx+1}: ({x}, {y})")
-                        
-                        # Check if the 3rd row, first two values might contain useful coordinates
-                        row3_scale = abs(homography_matrix[2, 2])
-                        if row3_scale > 0:
-                            pixel_x = int(abs(homography_matrix[2, 0]) * width / row3_scale)
-                            pixel_y = int(abs(homography_matrix[2, 1]) * height / row3_scale)
-                            self.get_logger().info(f"Trying third row coordinates: ({pixel_x}, {pixel_y})")
-                    
-                    # Validate again
-                    pixel_x = max(10, min(width-10, pixel_x))
-                    pixel_y = max(10, min(height-10, pixel_y))
-                except Exception as e:
-                    self.get_logger().error(f"Error in alternate coordinate calculation: {e}")
-                    # Fallback to image center if all else fails
-                    pixel_x = width // 2
-                    pixel_y = height // 2
+                # Attempt to estimate 3D position for this pixel
+                position_attempt = self.estimate_3d_position(pixel_x, pixel_y, msg.header)
+                
+                if position_attempt:
+                    position_camera = position_attempt
+                    used_position = (pixel_x, pixel_y)
+                    self.get_logger().info(f"Found valid depth at position: ({pixel_x}, {pixel_y})")
+                    break
             
-            self.get_logger().info(f"Using pixel coordinates: ({pixel_x}, {pixel_y})")
-            
-            # Now attempt 3D position estimation with the better coordinates
-            position_camera = self.estimate_3d_position(pixel_x, pixel_y, msg.header)
-            
+            # If we found a valid position with depth
             if position_camera:
                 try:
                     # Transform to map frame
                     map_point = self.transform_to_map(position_camera, msg.header)
                     
                     if map_point:
-                        self.get_logger().info(f"Transformed position in map frame: {map_point}")
+                        self.get_logger().info(f"Transformed position in map frame (from pixel {used_position}): {map_point}")
                         
                         # Save hazard marker position and publish marker
                         self.save_hazard_marker_position(object_id, hazard_name, map_point)
                         self.publish_marker(map_point, object_id, hazard_name)
                         
                         # Publish status
-                        self.publish_status(f"Detected {hazard_name} at position: x={map_point.x:.2f}, y={map_point.y:.2f}")
+                        self.publish_status(f"Detected {hazard_name} at position: x={map_point.x:.2f}, y={map_point.y:.2f}, z={map_point.z:.2f}")
                     else:
                         self.get_logger().error("Failed to transform point to map frame")
                         self.publish_status(f"Detected {hazard_name} but failed to transform to map")
@@ -318,7 +290,7 @@ class HazardMarkerDetector(Node):
                     self.get_logger().error(f"Error in transformation: {e}")
                     self.publish_status(f"Detected {hazard_name} but error in transformation")
             else:
-                self.get_logger().warning(f"Could not estimate 3D position for {hazard_name}")
+                self.get_logger().warning(f"Could not find valid depth data at any test position")
                 self.publish_status(f"Detected {hazard_name} but could not determine position")
 
     # def find_object_callback(self, msg):
