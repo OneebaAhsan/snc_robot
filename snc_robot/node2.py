@@ -308,8 +308,8 @@ class HazardMarkerDetector(Node):
         given its pixel coordinates (x, y). Prefers using depth camera data.
         Returns a Point object or None if estimation fails.
         """
-        x = int(round(x))  
-        y = int(round(y))          
+        pixel_x = int(round(pixel_x))  
+        pixel_y = int(round(pixel_y))          
         # log entry into the function for debugging flow
         self.get_logger().info(f"Attempting to estimate 3D position for pixel ({pixel_x}, {pixel_y})")
 
