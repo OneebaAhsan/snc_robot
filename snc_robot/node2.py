@@ -488,7 +488,6 @@ class HazardMarkerDetector(Node):
         else:
             self.get_logger().debug(f"Already detected hazard seen again: {coord_str}")
 
-
     def estimate_3d_position(self, pixel_x: int, pixel_y: int, header: Header) -> Union[Point, None]:
         """
         Estimates the 3D coordinates of a point in the camera's optical frame,
@@ -503,7 +502,6 @@ class HazardMarkerDetector(Node):
         # check prerequisites: We need both depth data and camera calibration
         if self.camera_intrinsics is None:
             self.get_logger().warning("Cannot estimate 3D position: Camera intrinsics not available.")
-            # self.publish_status("Waiting for camera info") # Update status
             return None
         
         if self.last_depth_image is None:
@@ -513,7 +511,7 @@ class HazardMarkerDetector(Node):
             
         if self.last_depth_image is not None: 
             self.get_logger().info("Attempting estimation using depth image...")
-            h, w = self.last_depth_image.shape[:2] # det depth image dimensions
+            h, w = self.last_depth_image.shape[:2] # get depth image dimensions
 
         # check if the detected pixel coordinates are within the image bounds
         if 0 <= pixel_y < h and 0 <= pixel_x < w:
@@ -527,39 +525,128 @@ class HazardMarkerDetector(Node):
 
             depth_value = self.last_depth_image[pixel_y, pixel_x]
             
+            # Print depth value type and value for debugging
+            self.get_logger().info(f"Depth value type: {type(depth_value)}, Value: {depth_value}")
+            
             valid_depths = region[region > 0]
             if len(valid_depths) > 0:
                 depth_value = np.median(valid_depths)
 
-                # convert depth value to meters.
+                # convert depth value to meters based on its type
                 if isinstance(depth_value, np.uint16): 
                     depth_meters = float(depth_value) / 1000.0
                     self.get_logger().info(f"  Depth value (uint16) at ({pixel_x}, {pixel_y}): {depth_value} -> {depth_meters:.3f}m")
-                elif isinstance(depth_value, np.float32): # Check if it's likely meters
+                elif isinstance(depth_value, (np.float32, np.float64, float)): 
+                    # Handle float64 depth values - likely already in meters
                     depth_meters = float(depth_value)
-                    self.get_logger().info(f"  Depth value (float32) at ({pixel_x}, {pixel_y}): {depth_meters:.3f}m")
+                    self.get_logger().info(f"  Depth value (float) at ({pixel_x}, {pixel_y}): {depth_meters:.3f}m")
                 else:
                     # handle unexpected depth types
-                    self.get_logger().error(f"  Unexpected depth value type: {type(depth_value)}. Cannot interpret depth.")
+                    self.get_logger().error(f"  Unexpected depth value type: {type(depth_value)}, value: {depth_value}. Cannot interpret depth.")
                     self.publish_status("Error: Unexpected depth format")
                     return None
 
+                # Validate depth range
+                if not np.isfinite(depth_meters):
+                    self.get_logger().warning(f"  Invalid depth value (NaN or Inf): {depth_meters}")
+                    return None
+                    
                 if 0.1 < depth_meters < 10.0:
                     fx = self.camera_intrinsics['fx']
                     fy = self.camera_intrinsics['fy']
                     cx = self.camera_intrinsics['cx']
                     cy = self.camera_intrinsics['cy']
 
-                    # calculate 3d coods  
+                    # calculate 3d coords  
                     x_cam = (pixel_x - cx) * depth_meters / fx
                     y_cam = (pixel_y - cy) * depth_meters / fy
                     z_cam = depth_meters
 
+                    self.get_logger().info(f"  Calculated 3D position: x={x_cam:.3f}, y={y_cam:.3f}, z={z_cam:.3f}")
                     return Point(x=x_cam, y=y_cam, z=z_cam)
+                else:
+                    self.get_logger().warning(f"  Depth value {depth_meters:.3f}m is outside valid range (0.1m - 10.0m)")
+            else:
+                self.get_logger().warning(f"  No valid depth values found in region around ({pixel_x}, {pixel_y})")
+
+        else:
+            self.get_logger().warning(f"  Pixel ({pixel_x}, {pixel_y}) is outside image bounds ({w}x{h})")
 
         self.get_logger().warning("Could not get valid depth information for the detected object")
         self.publish_status("3D estimation failed (check logs)")
         return None
+
+    # def estimate_3d_position(self, pixel_x: int, pixel_y: int, header: Header) -> Union[Point, None]:
+    #     """
+    #     Estimates the 3D coordinates of a point in the camera's optical frame,
+    #     given its pixel coordinates (x, y). Prefers using depth camera data.
+    #     Returns a Point object or None if estimation fails.
+    #     """
+    #     pixel_x = int(round(pixel_x))  
+    #     pixel_y = int(round(pixel_y))          
+    #     # log entry into the function for debugging flow
+    #     self.get_logger().info(f"Attempting to estimate 3D position for pixel ({pixel_x}, {pixel_y})")
+
+    #     # check prerequisites: We need both depth data and camera calibration
+    #     if self.camera_intrinsics is None:
+    #         self.get_logger().warning("Cannot estimate 3D position: Camera intrinsics not available.")
+    #         # self.publish_status("Waiting for camera info") # Update status
+    #         return None
+        
+    #     if self.last_depth_image is None:
+    #         self.get_logger().warning("Cannot estimate 3D position: Depth image not available.")
+    #         self.publish_status("Waiting for depth image") 
+    #         return None
+            
+    #     if self.last_depth_image is not None: 
+    #         self.get_logger().info("Attempting estimation using depth image...")
+    #         h, w = self.last_depth_image.shape[:2] # det depth image dimensions
+
+    #     # check if the detected pixel coordinates are within the image bounds
+    #     if 0 <= pixel_y < h and 0 <= pixel_x < w:
+    #         # access the depth value at the specific pixel
+    #         region_size = 5
+    #         y_min = max(0, pixel_y - region_size)
+    #         y_max = min(h, pixel_y + region_size)
+    #         x_min = max(0, pixel_x - region_size)
+    #         x_max = min(w, pixel_x + region_size)            
+    #         region = self.last_depth_image[y_min:y_max, x_min:x_max]
+
+    #         depth_value = self.last_depth_image[pixel_y, pixel_x]
+            
+    #         valid_depths = region[region > 0]
+    #         if len(valid_depths) > 0:
+    #             depth_value = np.median(valid_depths)
+
+    #             # convert depth value to meters.
+    #             if isinstance(depth_value, np.uint16): 
+    #                 depth_meters = float(depth_value) / 1000.0
+    #                 self.get_logger().info(f"  Depth value (uint16) at ({pixel_x}, {pixel_y}): {depth_value} -> {depth_meters:.3f}m")
+    #             elif isinstance(depth_value, np.float32): # Check if it's likely meters
+    #                 depth_meters = float(depth_value)
+    #                 self.get_logger().info(f"  Depth value (float32) at ({pixel_x}, {pixel_y}): {depth_meters:.3f}m")
+    #             else:
+    #                 # handle unexpected depth types
+    #                 self.get_logger().error(f"  Unexpected depth value type: {type(depth_value)}. Cannot interpret depth.")
+    #                 self.publish_status("Error: Unexpected depth format")
+    #                 return None
+
+    #             if 0.1 < depth_meters < 10.0:
+    #                 fx = self.camera_intrinsics['fx']
+    #                 fy = self.camera_intrinsics['fy']
+    #                 cx = self.camera_intrinsics['cx']
+    #                 cy = self.camera_intrinsics['cy']
+
+    #                 # calculate 3d coods  
+    #                 x_cam = (pixel_x - cx) * depth_meters / fx
+    #                 y_cam = (pixel_y - cy) * depth_meters / fy
+    #                 z_cam = depth_meters
+
+    #                 return Point(x=x_cam, y=y_cam, z=z_cam)
+
+    #     self.get_logger().warning("Could not get valid depth information for the detected object")
+    #     self.publish_status("3D estimation failed (check logs)")
+    #     return None
 
     def transform_to_map(self, point_in_camera: Point, header: Header) -> Union[Point,None]:
         """
