@@ -5,7 +5,7 @@ from sensor_msgs.msg import Image, LaserScan, CameraInfo
 from visualization_msgs.msg import Marker # publisher definition
 from std_msgs.msg import String, Header, Float32MultiArray
 from typing import Union
-from geometry_msgs.msg import Point, PoseStamped 
+from geometry_msgs.msg import Point, PoseStamped, PointStamped
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
@@ -13,6 +13,7 @@ import tf2_ros
 import tf2_geometry_msgs 
 from tf2_ros import Buffer, TransformListener, LookupException, ConnectivityException, ExtrapolationException, TransformException
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
+from rclpy.duration import Duration
 import math 
 from find_object_2d.msg import ObjectsStamped
 import os
@@ -140,69 +141,124 @@ class HazardMarkerDetector(Node):
         except Exception as e:
             self.get_logger().error(f'CvBridge Error converting depth image: {e}')
 
-    def find_object_callback(self, msg: ObjectsStamped):
+    # def find_object_callback(self, msg: ObjectsStamped):
+    #     """
+    #     Callback for find_object_2d detections.
+    #     Extracts object coordinates, estimates 3D position, transforms to map frame, and publishes the hazard marker.
+    #     """
+    #     # log receipt of the object detection message
+    #     self.get_logger().info(f"Received {len(msg.objects.data) // 12} objects detected!")
+
+    #     if len(msg.objects.data) == 0:
+    #         self.get_logger().info("Empty detection message received.")
+    #         return
+
+    #     # loop through all detected objects (every 12th entry in the msg.objects.data)
+    #     for i in range(0, len(msg.objects.data), 12):  # Each object has 12 values
+
+    #         object_id = int(msg.objects.data[i])
+    #         self.get_logger().info(f"Processing object with ID: {object_id}")
+        
+    #         # extract the homography matrix for this object detection (values 2 to 11)
+    #         h = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
+
+    #         # compute pixel position (u, v) from homography (center of object)
+    #         self.get_logger().info(f"Homography matrix: {h}")
+    #         px_homo = np.dot(h, np.array([0, 0, 1]))  # Object center in image space
+    #         self.get_logger().info(f"Homogeneous coords: {px_homo}")
+    #         pixel_x = px_homo[0] / px_homo[2]
+    #         pixel_y = px_homo[1] / px_homo[2]
+
+    #         self.get_logger().info(f"Detected object at pixel: ({pixel_x}, {pixel_y})")
+
+    #         # estimate the 3D position using depth information
+    #         point_camera = self.estimate_3d_position(int(pixel_x), int(pixel_y), msg.header)
+    #         if point_camera:
+    #             self.get_logger().info(f"Estimated 3D position: {point_camera}")
+
+    #             # transform to map frame using TF
+    #             map_point = self.transform_to_map(point_camera, msg.header)
+    #             if map_point:
+    #                 self.get_logger().info(f"Map-relative position: x={map_point.x}, y={map_point.y}, z={map_point.z}")
+
+    #                 # get hazard ID from the message data (directly mapped from find_object)
+    #                 hazard_id = msg.objects.data[i]  # Use the first value of the 12 values for object ID
+    #                 hazard_name = HAZARD_ID_TO_NAME.get(hazard_id, "Unknown")
+
+    #                 # save the hazard marker position to file
+    #                 self.save_hazard_marker_position(hazard_id, hazard_name, map_point)
+
+    #                 # publish the marker at the map position
+    #                 self.publish_marker(map_point, hazard_id, hazard_name)
+    #             else:
+    #                 self.get_logger().warning(f"Failed to transorm point to map frame")
+
+    #         # if no valid point found, continue checking for other objects
+    #         else:
+    #             self.get_logger().warning(f"Could not estimate 3D position for object {i // 12 + 1}.")
+
+    #             # if we can't get depth, try to estimate position in a different way
+    #             self.publish_status(f"Detected {hazard_name} but could not determine position")
+
+    #     # debugging to check how many objects were detected in the message
+    #     if msg.objects.data:
+    #         num_objects = len(msg.objects.data) // 12 
+    #         self.get_logger().info(f"  Message contained {num_objects} detected object(s).")
+
+    def find_object_callback(self, msg):
         """
         Callback for find_object_2d detections.
         Extracts object coordinates, estimates 3D position, transforms to map frame, and publishes the hazard marker.
         """
-        # log receipt of the object detection message
-        self.get_logger().info(f"Received {len(msg.objects.data) // 12} objects detected!")
-
-        if len(msg.objects.data) == 0:
+        if not msg.objects.data:
             self.get_logger().info("Empty detection message received.")
+            self.publish_status("No hazards detected")
             return
 
-        # loop through all detected objects (every 12th entry in the msg.objects.data)
-        for i in range(0, len(msg.objects.data), 12):  # Each object has 12 values
+        self.get_logger().info(f"Received {len(msg.objects.data) // 12} objects detected!")
 
+        for i in range(0, len(msg.objects.data), 12):
             object_id = int(msg.objects.data[i])
             self.get_logger().info(f"Processing object with ID: {object_id}")
-        
-            # extract the homography matrix for this object detection (values 2 to 11)
-            h = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
 
-            # compute pixel position (u, v) from homography (center of object)
+            h = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
             self.get_logger().info(f"Homography matrix: {h}")
-            px_homo = np.dot(h, np.array([0, 0, 1]))  # Object center in image space
+
+            px_homo = np.dot(h, np.array([0, 0, 1]))
             self.get_logger().info(f"Homogeneous coords: {px_homo}")
+            
             pixel_x = px_homo[0] / px_homo[2]
             pixel_y = px_homo[1] / px_homo[2]
-
             self.get_logger().info(f"Detected object at pixel: ({pixel_x}, {pixel_y})")
 
-            # estimate the 3D position using depth information
+            # 🔵 Always extract hazard name early
+            hazard_id = msg.objects.data[i]
+            hazard_name = HAZARD_ID_TO_NAME.get(hazard_id, "Unknown")
+
+            # Estimate 3D point
             point_camera = self.estimate_3d_position(int(pixel_x), int(pixel_y), msg.header)
+            
             if point_camera:
-                self.get_logger().info(f"Estimated 3D position: {point_camera}")
+                self.get_logger().info(f"Estimated 3D position in camera frame: {point_camera}")
+                try:
+                    point_map = self.tf_buffer.transform(
+                        PointStamped(header=Header(frame_id="camera_link"), point=point_camera),
+                        "map",
+                        timeout=Duration(seconds=0.5)
+                    )
+                    self.get_logger().info(f"Transformed 3D position in map frame: {point_map}")
 
-                # transform to map frame using TF
-                map_point = self.transform_to_map(point_camera, msg.header)
-                if map_point:
-                    self.get_logger().info(f"Map-relative position: x={map_point.x}, y={map_point.y}, z={map_point.z}")
+                    # Save the hazard marker
+                    self.save_hazard_marker(hazard_name, point_map.point)
 
-                    # get hazard ID from the message data (directly mapped from find_object)
-                    hazard_id = msg.objects.data[i]  # Use the first value of the 12 values for object ID
-                    hazard_name = HAZARD_ID_TO_NAME.get(hazard_id, "Unknown")
+                except Exception as e:
+                    self.get_logger().error(f"Error transforming point to map frame: {e}")
+                    self.publish_status(f"Detected {hazard_name} but error transforming to map frame")
 
-                    # save the hazard marker position to file
-                    self.save_hazard_marker_position(hazard_id, hazard_name, map_point)
-
-                    # publish the marker at the map position
-                    self.publish_marker(map_point, hazard_id, hazard_name)
-                else:
-                    self.get_logger().warning(f"Failed to transorm point to map frame")
-
-            # if no valid point found, continue checking for other objects
             else:
                 self.get_logger().warning(f"Could not estimate 3D position for object {i // 12 + 1}.")
-
-                # if we can't get depth, try to estimate position in a different way
                 self.publish_status(f"Detected {hazard_name} but could not determine position")
 
-        # debugging to check how many objects were detected in the message
-        if msg.objects.data:
-            num_objects = len(msg.objects.data) // 12 
-            self.get_logger().info(f"  Message contained {num_objects} detected object(s).")
 
     def save_hazard_marker_position(self, hazard_id, hazard_name, position):
         """
@@ -252,6 +308,8 @@ class HazardMarkerDetector(Node):
         given its pixel coordinates (x, y). Prefers using depth camera data.
         Returns a Point object or None if estimation fails.
         """
+        x = int(round(x))  
+        y = int(round(y))          
         # log entry into the function for debugging flow
         self.get_logger().info(f"Attempting to estimate 3D position for pixel ({pixel_x}, {pixel_y})")
 
