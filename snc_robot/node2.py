@@ -238,62 +238,41 @@ class HazardMarkerDetector(Node):
                 
             width = self.camera_intrinsics['width']
             height = self.camera_intrinsics['height']
-            self.get_logger().info(f"Image dimensions: {width}x{height}")
             
-            # Normalize coordinates properly
-            if homogeneous_coords[2] != 0:  # Avoid division by zero
-                pixel_x_norm = homogeneous_coords[0] / homogeneous_coords[2]
-                pixel_y_norm = homogeneous_coords[1] / homogeneous_coords[2]
+            # Get pixel coordinates
+            if homogeneous_coords[2] != 0:
+                pixel_x = int(width // 2)  # Use center of image as fallback
+                pixel_y = int(height // 2)
                 
-                pixel_x = int(pixel_x_norm)
-                pixel_y = int(pixel_y_norm)
+                self.get_logger().info(f"Using center position: ({pixel_x}, {pixel_y})")
                 
-                # Ensure the pixel is within image bounds
-                pixel_x = max(0, min(width-1, pixel_x))
-                pixel_y = max(0, min(height-1, pixel_y))
+                # Attempt to estimate 3D position
+                position_camera = self.estimate_3d_position(pixel_x, pixel_y, msg.header)
                 
-                self.get_logger().info(f"Detected object at pixel: ({pixel_x}, {pixel_y})")
+                if position_camera:
+                    try:
+                        # Transform from camera frame to map frame
+                        map_point = self.transform_to_map(position_camera, msg.header)
+                        
+                        if map_point:
+                            self.get_logger().info(f"Transformed 3D position in map frame: {map_point}")
+                            
+                            # Save hazard marker position and publish marker
+                            self.save_hazard_marker_position(object_id, hazard_name, map_point)
+                            self.publish_marker(map_point, object_id, hazard_name)
+                        else:
+                            self.get_logger().error("Failed to transform point to map frame")
+                    
+                    except Exception as e:
+                        self.get_logger().error(f"Error transforming point to map frame: {e}")
+                        self.publish_status(f"Detected {hazard_name} but error transforming to map frame")
+                else:
+                    self.get_logger().warning(f"Could not estimate 3D position for object {object_id}.")
+                    self.publish_status(f"Detected {hazard_name} but could not determine position")
             else:
                 self.get_logger().error("Invalid homogeneous coordinates (division by zero)")
                 continue
 
-            # === 3D position estimation ===
-            if pixel_x < 10 and pixel_y < 10:  # If still near (0,0), check the logs
-                pixel_x = int(width // 2)
-                pixel_y = int(height // 2)
-                self.get_logger().info(f"Using fallback pixel position: ({pixel_x}, {pixel_y})")
-
-            # Attempt to estimate 3D position
-            position_camera = self.estimate_3d_position(pixel_x, pixel_y, msg.header)
-            
-            if position_camera:
-                try:
-                    # Create a point stamped message
-                    point_stamped = PointStamped()
-                    point_stamped.header.frame_id = self.camera_optical_frame
-                    point_stamped.header.stamp = self.get_clock().now().to_msg()
-                    point_stamped.point = position_camera
-                    
-                    self.get_logger().info(f"Looking up transform from {self.camera_optical_frame} to {self.map_frame}")
-                    
-                    # Transform from camera frame to map frame
-                    map_point = self.transform_to_map(position_camera, msg.header)
-                    
-                    if map_point:
-                        self.get_logger().info(f"Transformed 3D position in map frame: {map_point}")
-                        
-                        # Save hazard marker position and publish marker
-                        self.save_hazard_marker_position(object_id, hazard_name, map_point)
-                        self.publish_marker(map_point, object_id, hazard_name)
-                    else:
-                        self.get_logger().error("Failed to transform point to map frame")
-
-                except Exception as e:
-                    self.get_logger().error(f"Error transforming point to map frame: {e}")
-                    self.publish_status(f"Detected {hazard_name} but error transforming to map frame")
-            else:
-                self.get_logger().warning(f"Could not estimate 3D position for object ID {object_id}")
-    
     # def find_object_callback(self, msg):
     #     """
     #     Callback for find_object_2d detections.
