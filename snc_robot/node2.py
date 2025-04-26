@@ -221,6 +221,57 @@ class HazardMarkerDetector(Node):
             object_id = int(msg.objects.data[i])
             self.get_logger().info(f"Processing object with ID: {object_id}")
 
+            hazard_name = HAZARD_ID_TO_NAME.get(object_id, "Unknown")
+            
+            # === Homography matrix calculation ===
+            homography_matrix = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
+            homogeneous_coords = np.dot(homography_matrix, np.array([0, 0, 1]))
+
+            # Normalize
+            pixel_x_norm = homogeneous_coords[0] / homogeneous_coords[2]
+            pixel_y_norm = homogeneous_coords[1] / homogeneous_coords[2]
+
+            # Scale to real pixel coordinates
+            if self.last_depth_image is not None:
+                h, w = self.last_depth_image.shape[:2]
+                pixel_x = int(pixel_x_norm * w)
+                pixel_y = int(pixel_y_norm * h)
+            else:
+                self.get_logger().error("No depth image available yet!")
+                continue
+
+            self.get_logger().info(f"Detected object at pixel: ({pixel_x}, {pixel_y})")
+
+            # === 3D position estimation ===
+            position_camera = self.estimate_3d_position(pixel_x, pixel_y, msg.header)
+            
+            if position_camera:
+                try:
+                    # Transform from camera frame to map frame
+                    position_map = self.tf_buffer.transform(
+                        PointStamped(header=Header(frame_id="camera_link"), point=position_camera),
+                        "map",
+                        timeout=Duration(seconds=0.5)
+                    )
+
+                    self.get_logger().info(f"Transformed 3D position in map frame: {position_map}")
+
+                    # ✅ Save hazard marker using the correct function
+                    self.save_hazard_marker_position(object_id, hazard_name, position_map.point)
+
+                except Exception as e:
+                    self.get_logger().error(f"Error transforming point to map frame: {e}")
+                    self.publish_status(f"Detected {hazard_name} but error transforming to map frame")
+
+            else:
+                self.get_logger().warning(f"Could not estimate 3D position for object ID {object_id}")
+
+
+        """
+        for i in range(0, len(msg.objects.data), 12):
+            object_id = int(msg.objects.data[i])
+            self.get_logger().info(f"Processing object with ID: {object_id}")
+
             h = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
             self.get_logger().info(f"Homography matrix: {h}")
 
@@ -249,7 +300,8 @@ class HazardMarkerDetector(Node):
                     self.get_logger().info(f"Transformed 3D position in map frame: {point_map}")
 
                     # Save the hazard marker
-                    self.save_hazard_marker(hazard_name, point_map.point)
+                    # self.save_hazard_marker(hazard_name, point_map.point)
+                    self.save_hazard_marker_position(hazard_id, hazard_name, point_map.point)
 
                 except Exception as e:
                     self.get_logger().error(f"Error transforming point to map frame: {e}")
@@ -258,7 +310,7 @@ class HazardMarkerDetector(Node):
             else:
                 self.get_logger().warning(f"Could not estimate 3D position for object {i // 12 + 1}.")
                 self.publish_status(f"Detected {hazard_name} but could not determine position")
-
+        """
 
     # def save_hazard_marker_position(self, hazard_id, hazard_name, position):
     #     """
