@@ -196,6 +196,8 @@ class HazardMarkerDetector(Node):
                     if self.tf_buffer.can_transform('map', point_laser.header.frame_id, rclpy.time.Time(), 
                                                 timeout=rclpy.duration.Duration(seconds=1.0)):
                         
+                        # using latest available transform instead of the exact timestamp
+                        point_laser.header.stamp = self.get_clock().now().to_msg()   
                         point_map = self.tf_buffer.transform(
                             point_laser, 
                             'map', 
@@ -225,7 +227,7 @@ class HazardMarkerDetector(Node):
                                 'map',
                                 'base_link',  # Assuming this is the robot's base frame
                                 rclpy.time.Time(),
-                                timeout=rclpy.duration.Duration(seconds=1.0)
+                                timeout=rclpy.duration.Duration(seconds=2.0)   # increased time out from 1.0 to 2.0
                             )
                             
                             # Create a point in map frame directly
@@ -452,7 +454,8 @@ class HazardMarkerDetector(Node):
         else:
             marker.color.r = 0.5; marker.color.g = 0.0; marker.color.b = 0.5 # Purple
 
-        marker.lifetime = rclpy.duration.Duration(seconds=0).to_msg()
+        # marker.lifetime = rclpy.duration.Duration(seconds=0).to_msg()
+        marker.lifetime = rclpy.duration.Duration(seconds=3600).to_msg()  # 1 hour
         
         self.get_logger().info(f"Sending marker to publisher...")
         self.marker_publisher.publish(marker)
