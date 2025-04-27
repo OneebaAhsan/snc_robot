@@ -1,798 +1,798 @@
-import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import PointStamped
-from visualization_msgs.msg import Marker
-from find_object_2d.msg import ObjectsStamped
-import tf2_ros
-from tf2_geometry_msgs.tf2_geometry_msgs import do_transform_point
-import math
-from std_msgs.msg import Empty  
-from std_msgs.msg import String 
-from std_msgs.msg import Bool
-from sensor_msgs.msg import LaserScan
+# import rclpy
+# from rclpy.node import Node
+# from geometry_msgs.msg import PointStamped
+# from visualization_msgs.msg import Marker
+# from find_object_2d.msg import ObjectsStamped
+# import tf2_ros
+# from tf2_geometry_msgs.tf2_geometry_msgs import do_transform_point
+# import math
+# from std_msgs.msg import Empty  
+# from std_msgs.msg import String 
+# from std_msgs.msg import Bool
+# from sensor_msgs.msg import LaserScan
 
 
 
-class ObjectLoggerFromStamped(Node):
-    def __init__(self):
-        super().__init__('object_logger_from_stamped')
+# class ObjectLoggerFromStamped(Node):
+#     def __init__(self):
+#         super().__init__('object_logger_from_stamped')
 
-        self.create_subscription(ObjectsStamped, '/objectsStamped', self.object_callback, 10)
-        self.marker_pub = self.create_publisher(Marker, '/hazards', 10)
-        self.start_pub = self.create_publisher(Empty, '/trigger_start', 10)
-        self.exploration_started = False
-        self.status_pub = self.create_publisher(String, '/snc_status',10)
-        self.trigger_home = self.create_publisher(Empty,'/trigger_home',10)
+#         self.create_subscription(ObjectsStamped, '/objectsStamped', self.object_callback, 10)
+#         self.marker_pub = self.create_publisher(Marker, '/hazards', 10)
+#         self.start_pub = self.create_publisher(Empty, '/trigger_start', 10)
+#         self.exploration_started = False
+#         self.status_pub = self.create_publisher(String, '/snc_status',10)
+#         self.trigger_home = self.create_publisher(Empty,'/trigger_home',10)
 
-        self.laser_data = None
-        self.create_subscription(LaserScan, '/scan', self.laser_callback, 10)
-
-
-        self.detected_ids = set()
-        self.published_marker_ids = set()
-        self.return_triggered = False
-
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-
-        # Camera intrinsics
-        self.fx = 1034.65740703125
-        self.fy = 1034.1529541015625
-        self.cx = 618.2791137695312
-        self.cy = 348.23451259765625
+#         self.laser_data = None
+#         self.create_subscription(LaserScan, '/scan', self.laser_callback, 10)
 
 
-        self.id_to_label = {
-            0: "Unknown",
-            1: "Explosive",
-            2: "Flammable Gas",
-            3: "Non-Flammable Gas",
-            4: "Dangerous When Wet",
-            5: "Flammable Solid",
-            6: "Spontaneously Combustible",
-            7: "Oxidizer",
-            8: "Organic Peroxide",
-            9: "Inhalation Hazard",
-            10: "Poison",
-            11: "Radioactive",
-            12: "Corrosive",
-            13: "Start"   ##Add start marker
-        }
+#         self.detected_ids = set()
+#         self.published_marker_ids = set()
+#         self.return_triggered = False
 
-        self.publish_status("Waiting for hazards") 
+#         self.tf_buffer = tf2_ros.Buffer()
+#         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-    def publish_status(self, status_str):
-        msg = String()
-        msg.data = status_str
-        self.status_pub.publish(msg)
-        self.get_logger().info(f"SNC Status: {status_str}")
-
-    def laser_callback(self, msg):
-        self.laser_data = msg
+#         # Camera intrinsics
+#         self.fx = 1034.65740703125
+#         self.fy = 1034.1529541015625
+#         self.cx = 618.2791137695312
+#         self.cy = 348.23451259765625
 
 
-    def object_callback(self, msg):
-        data = msg.objects.data
-        if len(data) < 4:
-            self.get_logger().info("\U0001f6d1 No object detected.")
-            return
+#         self.id_to_label = {
+#             0: "Unknown",
+#             1: "Explosive",
+#             2: "Flammable Gas",
+#             3: "Non-Flammable Gas",
+#             4: "Dangerous When Wet",
+#             5: "Flammable Solid",
+#             6: "Spontaneously Combustible",
+#             7: "Oxidizer",
+#             8: "Organic Peroxide",
+#             9: "Inhalation Hazard",
+#             10: "Poison",
+#             11: "Radioactive",
+#             12: "Corrosive",
+#             13: "Start"   ##Add start marker
+#         }
 
-        object_id = int(data[0])
-        label = self.id_to_label.get(object_id, "Unknown")
+#         self.publish_status("Waiting for hazards") 
 
-        if object_id == 13 and not self.exploration_started:
-            self.get_logger().info("Start' marker detected! Triggering exploration...")
-            self.start_pub.publish(Empty())  # Publish to /trigger_start
-            self.exploration_started = True
-            return  # Exit early, no need to place marker
+#     def publish_status(self, status_str):
+#         msg = String()
+#         msg.data = status_str
+#         self.status_pub.publish(msg)
+#         self.get_logger().info(f"SNC Status: {status_str}")
+
+#     def laser_callback(self, msg):
+#         self.laser_data = msg
+
+
+#     def object_callback(self, msg):
+#         data = msg.objects.data
+#         if len(data) < 4:
+#             self.get_logger().info("\U0001f6d1 No object detected.")
+#             return
+
+#         object_id = int(data[0])
+#         label = self.id_to_label.get(object_id, "Unknown")
+
+#         if object_id == 13 and not self.exploration_started:
+#             self.get_logger().info("Start' marker detected! Triggering exploration...")
+#             self.start_pub.publish(Empty())  # Publish to /trigger_start
+#             self.exploration_started = True
+#             return  # Exit early, no need to place marker
         
-        if object_id == 13:
-            return
+#         if object_id == 13:
+#             return
 
-        # Skip if already detected
-        if object_id in self.detected_ids:
-            return
+#         # Skip if already detected
+#         if object_id in self.detected_ids:
+#             return
 
-        self.detected_ids.add(object_id)
-        self.publish_status(f"hazard_detected: {label}")
-        self.get_logger().info(f"New hazard detected: {label} (ID: {object_id}) \u2192 {len(self.detected_ids)}/5")
+#         self.detected_ids.add(object_id)
+#         self.publish_status(f"hazard_detected: {label}")
+#         self.get_logger().info(f"New hazard detected: {label} (ID: {object_id}) \u2192 {len(self.detected_ids)}/5")
 
 
-        if len(self.detected_ids) >= 5 and not self.return_triggered:
-            self.return_triggered = True
-            self.get_logger().info("Detected 5 unique hazards. Publishing completion signal.")
-            self.trigger_home.publish(Empty())
-            self.publish_status("hazard_detection_complete")
-            return
+#         if len(self.detected_ids) >= 5 and not self.return_triggered:
+#             self.return_triggered = True
+#             self.get_logger().info("Detected 5 unique hazards. Publishing completion signal.")
+#             self.trigger_home.publish(Empty())
+#             self.publish_status("hazard_detection_complete")
+#             return
 
         
-        #some fixes to check
-        x_raw, y_raw, z_raw = data[3], data[4], data[5]
-        self.get_logger().info(f"Raw 3D: x={x_raw}, y={y_raw}, z={z_raw}")
+#         #some fixes to check
+#         x_raw, y_raw, z_raw = data[3], data[4], data[5]
+#         self.get_logger().info(f"Raw 3D: x={x_raw}, y={y_raw}, z={z_raw}")
 
-        u = 640  # X pixel (center of 1280x720 image)
-        v = 360  # Y pixel (center of image)
-
-
-        fixed_z = 1.2  # meters
-
-        X = (u - self.cx) * fixed_z / self.fx
-        Y = (v - self.cy) * fixed_z / self.fy
-        Z = fixed_z
-
-        self.get_logger().info(f"Projected 3D (Fixed-Z): x={X:.2f}, y={Y:.2f}, z={Z:.2f}")
-
-        try:
-            point = PointStamped()
-            point.header.stamp = msg.header.stamp
-
-            point.header.frame_id = "camera_color_optical_frame" 
-
-            # Patch wrong frame_id if needed
-            # if point.header.frame_id == "oak_rgb_camera_optical_frame":
-            #     self.get_logger().warn("Patching frame_id from 'oak_rgb_camera_optical_frame' to 'oak_camera_rgb_camera_optical_frame'")
-            #     point.header.frame_id = "oak_camera_rgb_camera_optical_frame"
-
-            point.point.x = X
-            point.point.y = Y
-            point.point.z = Z
+#         u = 640  # X pixel (center of 1280x720 image)
+#         v = 360  # Y pixel (center of image)
 
 
-            self.get_logger().info(f"Position in camera frame: x={point.point.x:.2f}, y={point.point.y:.2f}, z={point.point.z:.2f}")
+#         fixed_z = 1.2  # meters
 
-            # transform = self.tf_buffer.lookup_transform(
-            #     'map',
-            #     point.header.frame_id,
-            #     rclpy.time.Time(),
-            #     timeout=rclpy.duration.Duration(seconds=1.0)
-            # )
+#         X = (u - self.cx) * fixed_z / self.fx
+#         Y = (v - self.cy) * fixed_z / self.fy
+#         Z = fixed_z
+
+#         self.get_logger().info(f"Projected 3D (Fixed-Z): x={X:.2f}, y={Y:.2f}, z={Z:.2f}")
+
+#         try:
+#             point = PointStamped()
+#             point.header.stamp = msg.header.stamp
+
+#             point.header.frame_id = "camera_color_optical_frame" 
+
+#             # Patch wrong frame_id if needed
+#             # if point.header.frame_id == "oak_rgb_camera_optical_frame":
+#             #     self.get_logger().warn("Patching frame_id from 'oak_rgb_camera_optical_frame' to 'oak_camera_rgb_camera_optical_frame'")
+#             #     point.header.frame_id = "oak_camera_rgb_camera_optical_frame"
+
+#             point.point.x = X
+#             point.point.y = Y
+#             point.point.z = Z
+
+
+#             self.get_logger().info(f"Position in camera frame: x={point.point.x:.2f}, y={point.point.y:.2f}, z={point.point.z:.2f}")
+
+#             # transform = self.tf_buffer.lookup_transform(
+#             #     'map',
+#             #     point.header.frame_id,
+#             #     rclpy.time.Time(),
+#             #     timeout=rclpy.duration.Duration(seconds=1.0)
+#             # )
 
 
 
-            transform = self.tf_buffer.lookup_transform(
-                'map',               # TO
-                'camera_color_optical_frame',        # FROM
-                # rclpy.time.Time(),
+#             transform = self.tf_buffer.lookup_transform(
+#                 'map',               # TO
+#                 'camera_color_optical_frame',        # FROM
+#                 # rclpy.time.Time(),
 
-                point.header.stamp,
-                timeout=rclpy.duration.Duration(seconds=1.0)
-            )
+#                 point.header.stamp,
+#                 timeout=rclpy.duration.Duration(seconds=1.0)
+#             )
 
 
-            point_in_map = do_transform_point(point, transform)
+#             point_in_map = do_transform_point(point, transform)
 
-            x = point_in_map.point.x
-            y = point_in_map.point.y
-            z = point_in_map.point.z
+#             x = point_in_map.point.x
+#             y = point_in_map.point.y
+#             z = point_in_map.point.z
 
-            self.get_logger().info(f"Object in map frame: x={x:.2f}, y={y:.2f}, z={z:.2f} (Label: {label})")
+#             self.get_logger().info(f"Object in map frame: x={x:.2f}, y={y:.2f}, z={z:.2f} (Label: {label})")
 
-            self.get_logger().info(f"Object in map frame: x={x:.2f}, y={y:.2f} (Label: {label})")
+#             self.get_logger().info(f"Object in map frame: x={x:.2f}, y={y:.2f} (Label: {label})")
 
-            marker = Marker()
-            marker.header.frame_id = "map"
-            marker.header.stamp = msg.header.stamp
-            marker.ns = "hazards"
-            # marker.id = object_id
-            marker.id = len(self.detected_ids)
+#             marker = Marker()
+#             marker.header.frame_id = "map"
+#             marker.header.stamp = msg.header.stamp
+#             marker.ns = "hazards"
+#             # marker.id = object_id
+#             marker.id = len(self.detected_ids)
 
-            marker.type = Marker.SPHERE
-            marker.action = Marker.ADD
-            marker.pose.position = point_in_map.point
-            marker.pose.orientation.w = 1.0
-            marker.scale.x = 0.2
-            marker.scale.y = 0.2
-            marker.scale.z = 0.2
-            marker.color.r = 1.0
-            marker.color.g = 0.0
-            marker.color.b = 0.0
-            marker.color.a = 1.0
+#             marker.type = Marker.SPHERE
+#             marker.action = Marker.ADD
+#             marker.pose.position = point_in_map.point
+#             marker.pose.orientation.w = 1.0
+#             marker.scale.x = 0.2
+#             marker.scale.y = 0.2
+#             marker.scale.z = 0.2
+#             marker.color.r = 1.0
+#             marker.color.g = 0.0
+#             marker.color.b = 0.0
+#             marker.color.a = 1.0
 
-            self.marker_pub.publish(marker)
-            self.get_logger().info(f"Marker published for {label} (ID: {object_id})")
+#             self.marker_pub.publish(marker)
+#             self.get_logger().info(f"Marker published for {label} (ID: {object_id})")
 
-        except Exception as e:
-            self.get_logger().warn(f"TF transform failed: {e}")
+#         except Exception as e:
+#             self.get_logger().warn(f"TF transform failed: {e}")
 
-def main(args=None):
-    rclpy.init(args=args)
-    node = ObjectLoggerFromStamped()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+# def main(args=None):
+#     rclpy.init(args=args)
+#     node = ObjectLoggerFromStamped()
+#     rclpy.spin(node)
+#     node.destroy_node()
+#     rclpy.shutdown()
 
-if __name__ == '__main__':
-    main()    
+# if __name__ == '__main__':
+#     main()    
 
 
 ########################### IF ABOVE DOESNT WORK, DEFAULT OF THIS #################
 
-# #!/usr/bin/env python3
-# import rclpy
-# from rclpy.node import Node
-# from sensor_msgs.msg import Image, LaserScan, CameraInfo
-# from visualization_msgs.msg import Marker
-# from std_msgs.msg import String, Header, Float32MultiArray
-# from typing import Union, List, Tuple, Optional
-# from geometry_msgs.msg import Point, PoseStamped, PointStamped
-# from cv_bridge import CvBridge
-# import cv2
-# import numpy as np
-# import tf2_ros
-# import tf2_geometry_msgs 
-# from tf2_ros import Buffer, TransformListener
-# from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
-# from rclpy.duration import Duration
-# import math 
-# from find_object_2d.msg import ObjectsStamped
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image, LaserScan, CameraInfo
+from visualization_msgs.msg import Marker
+from std_msgs.msg import String, Header, Float32MultiArray
+from typing import Union, List, Tuple, Optional
+from geometry_msgs.msg import Point, PoseStamped, PointStamped
+from cv_bridge import CvBridge
+import cv2
+import numpy as np
+import tf2_ros
+import tf2_geometry_msgs 
+from tf2_ros import Buffer, TransformListener
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
+from rclpy.duration import Duration
+import math 
+from find_object_2d.msg import ObjectsStamped
 
-# FIND_OBJECT_ID_TO_HAZARD_ID = {
-#     1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9, 10: 10, 11: 11, 12: 12,
-# }
+FIND_OBJECT_ID_TO_HAZARD_ID = {
+    1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9, 10: 10, 11: 11, 12: 12,
+}
 
-# HAZARD_ID_TO_NAME = {
-#     1: "Explosive", 2: "Flammable Gas", 3: "Non-Flammable Gas", 4: "Dangerous When Wet",
-#     5: "Flammable Solid", 6: "Spontaneously Combustible", 7: "Oxidizer", 8: "Organic Peroxide",
-#     9: "Inhalation Hazard", 10: "Poison", 11: "Radioactive", 12: "Corrosive"
-# }
+HAZARD_ID_TO_NAME = {
+    1: "Explosive", 2: "Flammable Gas", 3: "Non-Flammable Gas", 4: "Dangerous When Wet",
+    5: "Flammable Solid", 6: "Spontaneously Combustible", 7: "Oxidizer", 8: "Organic Peroxide",
+    9: "Inhalation Hazard", 10: "Poison", 11: "Radioactive", 12: "Corrosive"
+}
 
-# class HazardMarkerDetector(Node):
-#     """
-#     Listens for hazard markers detected by find_object_2d and uses laser scan data
-#     to determine their positions in the map frame.
-#     """
-#     def __init__(self):
-#         # initializes node, parameters, subscribers, publishers 
-#         super().__init__('hazard_marker_detector')
+class HazardMarkerDetector(Node):
+    """
+    Listens for hazard markers detected by find_object_2d and uses laser scan data
+    to determine their positions in the map frame.
+    """
+    def __init__(self):
+        # initializes node, parameters, subscribers, publishers 
+        super().__init__('hazard_marker_detector')
 
-#         # parameters
-#         self.declare_parameter('camera_info_topic', '/camera/color/camera_info')
-#         self.declare_parameter('depth_image_topic', '/camera/depth/image_raw')
-#         self.declare_parameter('laser_scan_topic', '/scan')
-#         self.declare_parameter('find_object_topic', '/find_object/objects')
-#         self.declare_parameter('hazard_marker_topic', '/hazards')
-#         self.declare_parameter('coords_topic', '/hazard_coords')
-#         self.declare_parameter('status_topic', '/snc_status')
-#         self.declare_parameter('map_frame', 'map')
-#         self.declare_parameter('camera_optical_frame', 'camera_color_optical_frame')
-#         self.declare_parameter('marker_publish_dist_threshold', 0.2)
+        # parameters
+        self.declare_parameter('camera_info_topic', '/camera/color/camera_info')
+        self.declare_parameter('depth_image_topic', '/camera/depth/image_raw')
+        self.declare_parameter('laser_scan_topic', '/scan')
+        self.declare_parameter('find_object_topic', '/find_object/objects')
+        self.declare_parameter('hazard_marker_topic', '/hazards')
+        self.declare_parameter('coords_topic', '/hazard_coords')
+        self.declare_parameter('status_topic', '/snc_status')
+        self.declare_parameter('map_frame', 'map')
+        self.declare_parameter('camera_optical_frame', 'camera_color_optical_frame')
+        self.declare_parameter('marker_publish_dist_threshold', 0.2)
 
-#         # parameter values
-#         self.camera_info_topic = self.get_parameter('camera_info_topic').value
-#         self.depth_image_topic = self.get_parameter('depth_image_topic').value
-#         self.laser_scan_topic = self.get_parameter('laser_scan_topic').value
-#         self.find_object_topic = '/objectsStamped'
-#         self.hazard_marker_topic = self.get_parameter('hazard_marker_topic').value
-#         self.status_topic = self.get_parameter('status_topic').value
-#         self.coords_topic = self.get_parameter('coords_topic').value
-#         self.map_frame = self.get_parameter('map_frame').value
-#         self.camera_optical_frame = self.get_parameter('camera_optical_frame').value
+        # parameter values
+        self.camera_info_topic = self.get_parameter('camera_info_topic').value
+        self.depth_image_topic = self.get_parameter('depth_image_topic').value
+        self.laser_scan_topic = self.get_parameter('laser_scan_topic').value
+        self.find_object_topic = '/objectsStamped'
+        self.hazard_marker_topic = self.get_parameter('hazard_marker_topic').value
+        self.status_topic = self.get_parameter('status_topic').value
+        self.coords_topic = self.get_parameter('coords_topic').value
+        self.map_frame = self.get_parameter('map_frame').value
+        self.camera_optical_frame = self.get_parameter('camera_optical_frame').value
 
-#         # initialization
-#         self.bridge = CvBridge()
-#         self.tf_buffer = Buffer()
-#         self.tf_listener = TransformListener(self.tf_buffer, self)
-#         self.camera_intrinsics = None
-#         self.last_laser_scan = None
+        # initialization
+        self.bridge = CvBridge()
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.camera_intrinsics = None
+        self.last_laser_scan = None
         
-#         # Track detected hazard markers to avoid duplicates
-#         self.detected_hazards = {}  # dict to store hazard_id -> position
+        # Track detected hazard markers to avoid duplicates
+        self.detected_hazards = {}  # dict to store hazard_id -> position
         
-#         # QoS Profiles
-#         qos_reliable = QoSProfile(reliability=QoSReliabilityPolicy.RELIABLE, history=QoSHistoryPolicy.KEEP_LAST, depth=10)
-#         qos_sensor = QoSProfile(reliability=QoSReliabilityPolicy.BEST_EFFORT, history=QoSHistoryPolicy.KEEP_LAST, depth=5)
-#         qos_cam_info = QoSProfile(reliability=QoSReliabilityPolicy.RELIABLE, history=QoSHistoryPolicy.KEEP_LAST, depth=1, durability=QoSDurabilityPolicy.VOLATILE)
+        # QoS Profiles
+        qos_reliable = QoSProfile(reliability=QoSReliabilityPolicy.RELIABLE, history=QoSHistoryPolicy.KEEP_LAST, depth=10)
+        qos_sensor = QoSProfile(reliability=QoSReliabilityPolicy.BEST_EFFORT, history=QoSHistoryPolicy.KEEP_LAST, depth=5)
+        qos_cam_info = QoSProfile(reliability=QoSReliabilityPolicy.RELIABLE, history=QoSHistoryPolicy.KEEP_LAST, depth=1, durability=QoSDurabilityPolicy.VOLATILE)
 
-#         # subscriptions 
-#         self.get_logger().info(f"Subscribing to Camera Info: {self.camera_info_topic}")
-#         self.cam_info_sub = self.create_subscription(CameraInfo, self.camera_info_topic, self.camera_info_callback, qos_cam_info)
+        # subscriptions 
+        self.get_logger().info(f"Subscribing to Camera Info: {self.camera_info_topic}")
+        self.cam_info_sub = self.create_subscription(CameraInfo, self.camera_info_topic, self.camera_info_callback, qos_cam_info)
 
-#         self.get_logger().info(f"Subscribing to Laser Scan: {self.laser_scan_topic}")
-#         self.laser_subscription = self.create_subscription(LaserScan, self.laser_scan_topic, self.laser_callback, qos_sensor)
+        self.get_logger().info(f"Subscribing to Laser Scan: {self.laser_scan_topic}")
+        self.laser_subscription = self.create_subscription(LaserScan, self.laser_scan_topic, self.laser_callback, qos_sensor)
 
-#         # crucial subscription
-#         self.get_logger().info(f"Attempting to subscribe to Find Object: {self.find_object_topic}")
-#         self.find_object_sub = self.create_subscription(
-#             ObjectsStamped,
-#             self.find_object_topic,
-#             self.find_object_callback,
-#             10
-#         )
+        # crucial subscription
+        self.get_logger().info(f"Attempting to subscribe to Find Object: {self.find_object_topic}")
+        self.find_object_sub = self.create_subscription(
+            ObjectsStamped,
+            self.find_object_topic,
+            self.find_object_callback,
+            10
+        )
 
-#         # publishers 
-#         self.get_logger().info(f"Publisher initialized for Hazard Markers: {self.hazard_marker_topic}")
-#         self.marker_publisher = self.create_publisher(Marker, self.hazard_marker_topic, qos_reliable)
+        # publishers 
+        self.get_logger().info(f"Publisher initialized for Hazard Markers: {self.hazard_marker_topic}")
+        self.marker_publisher = self.create_publisher(Marker, self.hazard_marker_topic, qos_reliable)
 
-#         self.get_logger().info(f"Publisher initialized for Status: {self.status_topic}")
-#         self.status_publisher = self.create_publisher(String, self.status_topic, qos_reliable)
+        self.get_logger().info(f"Publisher initialized for Status: {self.status_topic}")
+        self.status_publisher = self.create_publisher(String, self.status_topic, qos_reliable)
         
-#         self.get_logger().info(f"Publisher initialized for Hazard Coordinates: {self.coords_topic}")
-#         self.coords_publisher = self.create_publisher(String, self.coords_topic, qos_reliable)
+        self.get_logger().info(f"Publisher initialized for Hazard Coordinates: {self.coords_topic}")
+        self.coords_publisher = self.create_publisher(String, self.coords_topic, qos_reliable)
 
-#         # Periodically publish a test marker for debugging
-#         self.test_marker_timer = self.create_timer(5.0, self.publish_test_marker)
+        # Periodically publish a test marker for debugging
+        self.test_marker_timer = self.create_timer(5.0, self.publish_test_marker)
 
-#         self.get_logger().info('Hazard Marker Detector Node Initialized.')
-#         self.publish_status("Initializing and waiting for find_object messages...")
+        self.get_logger().info('Hazard Marker Detector Node Initialized.')
+        self.publish_status("Initializing and waiting for find_object messages...")
 
-#     def publish_status(self, status_text):
-#         # helper function to publish a status message and log it
-#         msg = String()
-#         msg.data = f"Node2: {status_text}"
-#         self.status_publisher.publish(msg)
-#         self.get_logger().info(f"Status: {status_text}")
+    def publish_status(self, status_text):
+        # helper function to publish a status message and log it
+        msg = String()
+        msg.data = f"Node2: {status_text}"
+        self.status_publisher.publish(msg)
+        self.get_logger().info(f"Status: {status_text}")
 
-#     def camera_info_callback(self, msg: CameraInfo):
-#         # stores camera intrinsic parameters when received
-#         if self.camera_intrinsics is None:
-#             self.get_logger().info("Received camera intrinsics.")
-#             self.camera_intrinsics = { 'fx': msg.k[0], 'fy': msg.k[4], 'cx': msg.k[2], 'cy': msg.k[5], 'width': msg.width, 'height': msg.height }
-#             self.publish_status("Camera info received")
+    def camera_info_callback(self, msg: CameraInfo):
+        # stores camera intrinsic parameters when received
+        if self.camera_intrinsics is None:
+            self.get_logger().info("Received camera intrinsics.")
+            self.camera_intrinsics = { 'fx': msg.k[0], 'fy': msg.k[4], 'cx': msg.k[2], 'cy': msg.k[5], 'width': msg.width, 'height': msg.height }
+            self.publish_status("Camera info received")
 
-#     def laser_callback(self, msg: LaserScan):
-#         # stores the latest laser scan
-#         self.last_laser_scan = msg
-#         self.get_logger().debug(f'Received laser scan message with frame_id: {msg.header.frame_id}')
+    def laser_callback(self, msg: LaserScan):
+        # stores the latest laser scan
+        self.last_laser_scan = msg
+        self.get_logger().debug(f'Received laser scan message with frame_id: {msg.header.frame_id}')
 
-#     def publish_test_marker(self):
-#         # Publish a static test marker to verify markers are visible in RViz
-#         marker = Marker()
-#         marker.header.frame_id = self.map_frame
-#         marker.header.stamp = self.get_clock().now().to_msg()
-#         marker.ns = "test_markers"
-#         marker.id = 999
-#         marker.type = Marker.SPHERE
-#         marker.action = Marker.ADD
-#         marker.pose.position.x = 0.0
-#         marker.pose.position.y = 0.0
-#         marker.pose.position.z = 0.5
-#         marker.pose.orientation.w = 1.0
-#         marker.scale.x = 0.5
-#         marker.scale.y = 0.5
-#         marker.scale.z = 0.5
-#         marker.color.r = 0.0
-#         marker.color.g = 1.0
-#         marker.color.b = 0.0
-#         marker.color.a = 1.0
-#         marker.lifetime = rclpy.duration.Duration(seconds=10).to_msg()
+    def publish_test_marker(self):
+        # Publish a static test marker to verify markers are visible in RViz
+        marker = Marker()
+        marker.header.frame_id = self.map_frame
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "test_markers"
+        marker.id = 999
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = 0.0
+        marker.pose.position.y = 0.0
+        marker.pose.position.z = 0.5
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.5
+        marker.scale.y = 0.5
+        marker.scale.z = 0.5
+        marker.color.r = 0.0
+        marker.color.g = 1.0
+        marker.color.b = 0.0
+        marker.color.a = 1.0
+        marker.lifetime = rclpy.duration.Duration(seconds=10).to_msg()
         
-#         self.marker_publisher.publish(marker)
-#         self.get_logger().debug("Published test marker")
+        self.marker_publisher.publish(marker)
+        self.get_logger().debug("Published test marker")
 
-#     def find_object_callback(self, msg: ObjectsStamped):
-#         """
-#         Callback for find_object_2d detections.
-#         Processes detected objects, estimates their positions using laser data,
-#         and publishes markers at those positions.
-#         """
-#         if not msg.objects.data:
-#             self.get_logger().info("Empty detection message received.")
-#             self.publish_status("No hazards detected")
-#             return
+    def find_object_callback(self, msg: ObjectsStamped):
+        """
+        Callback for find_object_2d detections.
+        Processes detected objects, estimates their positions using laser data,
+        and publishes markers at those positions.
+        """
+        if not msg.objects.data:
+            self.get_logger().info("Empty detection message received.")
+            self.publish_status("No hazards detected")
+            return
 
-#         # Check if we have laser data and camera intrinsics
-#         if self.last_laser_scan is None:
-#             self.get_logger().warning("No laser scan data available yet.")
-#             self.publish_status("Waiting for laser scan data")
-#             return
-#         if self.camera_intrinsics is None:
-#             self.get_logger().warning("Camera intrinsics not available yet.")
-#             self.publish_status("Waiting for camera intrinsics")
-#             return
+        # Check if we have laser data and camera intrinsics
+        if self.last_laser_scan is None:
+            self.get_logger().warning("No laser scan data available yet.")
+            self.publish_status("Waiting for laser scan data")
+            return
+        if self.camera_intrinsics is None:
+            self.get_logger().warning("Camera intrinsics not available yet.")
+            self.publish_status("Waiting for camera intrinsics")
+            return
 
-#         self.get_logger().info(f"Received {len(msg.objects.data) // 12} objects detected!")
+        self.get_logger().info(f"Received {len(msg.objects.data) // 12} objects detected!")
 
-#         for i in range(0, len(msg.objects.data), 12):
-#             object_id = int(msg.objects.data[i])
-#             hazard_name = HAZARD_ID_TO_NAME.get(object_id, "Unknown")
+        for i in range(0, len(msg.objects.data), 12):
+            object_id = int(msg.objects.data[i])
+            hazard_name = HAZARD_ID_TO_NAME.get(object_id, "Unknown")
             
-#             self.get_logger().info(f"Processing object with ID: {object_id}")
+            self.get_logger().info(f"Processing object with ID: {object_id}")
             
-#             # Extract bounding box info from the homography matrix
-#             h = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
+            # Extract bounding box info from the homography matrix
+            h = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
             
-#             # Compute the bounding box center by applying the homography to the reference object's center
-#             # Assume the reference object is centered at (0, 0) with a size of 100x100 pixels
-#             ref_center = np.array([50, 50, 1])  # Homogeneous coordinates
-#             image_center = h @ ref_center  # Apply homography
-#             image_center = image_center / image_center[2]  # Normalize homogeneous coordinates
-#             image_center_x = image_center[0]
-#             image_center_y = image_center[1]
+            # Compute the bounding box center by applying the homography to the reference object's center
+            # Assume the reference object is centered at (0, 0) with a size of 100x100 pixels
+            ref_center = np.array([50, 50, 1])  # Homogeneous coordinates
+            image_center = h @ ref_center  # Apply homography
+            image_center = image_center / image_center[2]  # Normalize homogeneous coordinates
+            image_center_x = image_center[0]
+            image_center_y = image_center[1]
             
-#             self.get_logger().info(f"Object center in image: x={image_center_x:.2f}, y={image_center_y:.2f}")
+            self.get_logger().info(f"Object center in image: x={image_center_x:.2f}, y={image_center_y:.2f}")
             
-#             # Use camera intrinsics to compute the angle
-#             fx = self.camera_intrinsics['fx']
-#             cx = self.camera_intrinsics['cx']
-#             cy = self.camera_intrinsics['cy']
-#             fy = self.camera_intrinsics['fy']
+            # Use camera intrinsics to compute the angle
+            fx = self.camera_intrinsics['fx']
+            cx = self.camera_intrinsics['cx']
+            cy = self.camera_intrinsics['cy']
+            fy = self.camera_intrinsics['fy']
             
-#             try:
-#                 # Create a point in the camera frame (at a unit distance along the ray)
-#                 point_camera = PointStamped()
-#                 point_camera.header.frame_id = self.camera_optical_frame
-#                 point_camera.header.stamp = self.get_clock().now().to_msg()
-#                 point_camera.point.x = 1.0  # Unit distance along the ray
-#                 point_camera.point.y = (image_center_x - cx) / fx  # Using pinhole camera model
-#                 point_camera.point.z = (image_center_y - cy) / fy
+            try:
+                # Create a point in the camera frame (at a unit distance along the ray)
+                point_camera = PointStamped()
+                point_camera.header.frame_id = self.camera_optical_frame
+                point_camera.header.stamp = self.get_clock().now().to_msg()
+                point_camera.point.x = 1.0  # Unit distance along the ray
+                point_camera.point.y = (image_center_x - cx) / fx  # Using pinhole camera model
+                point_camera.point.z = (image_center_y - cy) / fy
                 
-#                 # Transform the point to the laser frame
-#                 point_laser_dir = self.tf_buffer.transform(
-#                     point_camera,
-#                     self.last_laser_scan.header.frame_id,
-#                     timeout=rclpy.duration.Duration(seconds=1.0)
-#                 )
+                # Transform the point to the laser frame
+                point_laser_dir = self.tf_buffer.transform(
+                    point_camera,
+                    self.last_laser_scan.header.frame_id,
+                    timeout=rclpy.duration.Duration(seconds=1.0)
+                )
                 
-#                 # Compute the angle in the laser frame
-#                 angle = np.arctan2(point_laser_dir.point.y, point_laser_dir.point.x)
-#                 self.get_logger().info(f"Computed angle in laser frame: {angle:.2f} radians")
+                # Compute the angle in the laser frame
+                angle = np.arctan2(point_laser_dir.point.y, point_laser_dir.point.x)
+                self.get_logger().info(f"Computed angle in laser frame: {angle:.2f} radians")
                 
-#                 # Map the angle to a laser scan index
-#                 index = int((angle - self.last_laser_scan.angle_min) / self.last_laser_scan.angle_increment)
+                # Map the angle to a laser scan index
+                index = int((angle - self.last_laser_scan.angle_min) / self.last_laser_scan.angle_increment)
                 
-#                 # Check if index is within valid range
-#                 if 0 <= index < len(self.last_laser_scan.ranges):
-#                     # Get distance and apply a small correction factor
-#                     raw_distance = self.last_laser_scan.ranges[index]
-#                     distance = raw_distance * 0.95  # Apply a small correction factor
+                # Check if index is within valid range
+                if 0 <= index < len(self.last_laser_scan.ranges):
+                    # Get distance and apply a small correction factor
+                    raw_distance = self.last_laser_scan.ranges[index]
+                    distance = raw_distance * 0.95  # Apply a small correction factor
                     
-#                     # Validate distance
-#                     if not np.isfinite(distance) or not (self.last_laser_scan.range_min <= distance <= self.last_laser_scan.range_max):
-#                         self.get_logger().warn(f'Invalid range for object {object_id}: {distance}m')
-#                         self.publish_status(f"Detected {hazard_name} but invalid distance")
-#                         self.place_fallback_marker(object_id, hazard_name)
-#                         continue
+                    # Validate distance
+                    if not np.isfinite(distance) or not (self.last_laser_scan.range_min <= distance <= self.last_laser_scan.range_max):
+                        self.get_logger().warn(f'Invalid range for object {object_id}: {distance}m')
+                        self.publish_status(f"Detected {hazard_name} but invalid distance")
+                        self.place_fallback_marker(object_id, hazard_name)
+                        continue
                     
-#                     # Create point in laser frame
-#                     point_laser = PointStamped()
-#                     point_laser.header.frame_id = self.last_laser_scan.header.frame_id
-#                     point_laser.header.stamp = self.get_clock().now().to_msg()
-#                     point_laser.point.x = distance * np.cos(angle)
-#                     point_laser.point.y = distance * np.sin(angle)
-#                     point_laser.point.z = 0.1  # Lower height for more accurate placement
+                    # Create point in laser frame
+                    point_laser = PointStamped()
+                    point_laser.header.frame_id = self.last_laser_scan.header.frame_id
+                    point_laser.header.stamp = self.get_clock().now().to_msg()
+                    point_laser.point.x = distance * np.cos(angle)
+                    point_laser.point.y = distance * np.sin(angle)
+                    point_laser.point.z = 0.1  # Lower height for more accurate placement
                     
-#                     self.get_logger().info(f"Estimated position in laser frame: x={point_laser.point.x:.2f}, y={point_laser.point.y:.2f}")
+                    self.get_logger().info(f"Estimated position in laser frame: x={point_laser.point.x:.2f}, y={point_laser.point.y:.2f}")
                     
-#                     # Transform to map frame and publish marker
-#                     try:
-#                         if self.tf_buffer.can_transform('map', point_laser.header.frame_id, rclpy.time.Time(), 
-#                                                     timeout=rclpy.duration.Duration(seconds=1.0)):
+                    # Transform to map frame and publish marker
+                    try:
+                        if self.tf_buffer.can_transform('map', point_laser.header.frame_id, rclpy.time.Time(), 
+                                                    timeout=rclpy.duration.Duration(seconds=1.0)):
                             
-#                             point_map = self.tf_buffer.transform(
-#                                 point_laser, 
-#                                 'map', 
-#                                 timeout=rclpy.duration.Duration(seconds=1.0)
-#                             )
+                            point_map = self.tf_buffer.transform(
+                                point_laser, 
+                                'map', 
+                                timeout=rclpy.duration.Duration(seconds=1.0)
+                            )
                             
-#                             self.get_logger().info(f"Transformed to map: x={point_map.point.x:.2f}, y={point_map.point.y:.2f}, z={point_map.point.z:.2f}")
+                            self.get_logger().info(f"Transformed to map: x={point_map.point.x:.2f}, y={point_map.point.y:.2f}, z={point_map.point.z:.2f}")
                             
-#                             # Save and publish marker
-#                             if object_id not in self.detected_hazards:
-#                                 self.save_hazard_marker_position(object_id, hazard_name, point_map.point)
-#                                 self.publish_marker(point_map.point, object_id, hazard_name)
-#                             else:
-#                                 self.get_logger().info(f"Object ID {object_id} already detected, skipping new marker")
-#                         else:
-#                             self.get_logger().warn(f"Transform to map frame not ready, using fallback")
-#                             self.place_fallback_marker(object_id, hazard_name)
+                            # Save and publish marker
+                            if object_id not in self.detected_hazards:
+                                self.save_hazard_marker_position(object_id, hazard_name, point_map.point)
+                                self.publish_marker(point_map.point, object_id, hazard_name)
+                            else:
+                                self.get_logger().info(f"Object ID {object_id} already detected, skipping new marker")
+                        else:
+                            self.get_logger().warn(f"Transform to map frame not ready, using fallback")
+                            self.place_fallback_marker(object_id, hazard_name)
                     
-#                     except Exception as e:
-#                         self.get_logger().error(f"Error in transformation: {e}")
-#                         self.publish_status(f"Error processing {hazard_name}")
-#                         self.place_fallback_marker(object_id, hazard_name)
-#                 else:
-#                     self.get_logger().warn(f"Object position {index} is outside laser scan range [0, {len(self.last_laser_scan.ranges)-1}]")
-#                     self.publish_status(f"Detected {hazard_name} but outside scan range")
-#                     self.place_fallback_marker(object_id, hazard_name)
+                    except Exception as e:
+                        self.get_logger().error(f"Error in transformation: {e}")
+                        self.publish_status(f"Error processing {hazard_name}")
+                        self.place_fallback_marker(object_id, hazard_name)
+                else:
+                    self.get_logger().warn(f"Object position {index} is outside laser scan range [0, {len(self.last_laser_scan.ranges)-1}]")
+                    self.publish_status(f"Detected {hazard_name} but outside scan range")
+                    self.place_fallback_marker(object_id, hazard_name)
             
-#             except Exception as e:
-#                 self.get_logger().error(f"Error in angle computation or transform: {e}")
-#                 self.publish_status(f"Error processing {hazard_name}")
-#                 self.place_fallback_marker(object_id, hazard_name)
+            except Exception as e:
+                self.get_logger().error(f"Error in angle computation or transform: {e}")
+                self.publish_status(f"Error processing {hazard_name}")
+                self.place_fallback_marker(object_id, hazard_name)
 
 
-#     def place_fallback_marker(self, object_id, hazard_name):
-#         """Place marker at a fixed location in front of the robot as fallback"""
-#         try:
-#             # Get robot position in map
-#             robot_transform = self.tf_buffer.lookup_transform(
-#                 'map',
-#                 'base_link',
-#                 rclpy.time.Time(),
-#                 timeout=rclpy.duration.Duration(seconds=1.0)
-#             )
+    def place_fallback_marker(self, object_id, hazard_name):
+        """Place marker at a fixed location in front of the robot as fallback"""
+        try:
+            # Get robot position in map
+            robot_transform = self.tf_buffer.lookup_transform(
+                'map',
+                'base_link',
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=1.0)
+            )
             
-#             # Create a point 1m in front of robot
-#             point_map = PointStamped()
-#             point_map.header.frame_id = 'map'
-#             point_map.header.stamp = self.get_clock().now().to_msg()
+            # Create a point 1m in front of robot
+            point_map = PointStamped()
+            point_map.header.frame_id = 'map'
+            point_map.header.stamp = self.get_clock().now().to_msg()
             
-#             # Extract robot position
-#             x = robot_transform.transform.translation.x
-#             y = robot_transform.transform.translation.y
-#             z = robot_transform.transform.translation.z
+            # Extract robot position
+            x = robot_transform.transform.translation.x
+            y = robot_transform.transform.translation.y
+            z = robot_transform.transform.translation.z
             
-#             # Extract orientation quaternion
-#             qx = robot_transform.transform.rotation.x
-#             qy = robot_transform.transform.rotation.y
-#             qz = robot_transform.transform.rotation.z
-#             qw = robot_transform.transform.rotation.w
+            # Extract orientation quaternion
+            qx = robot_transform.transform.rotation.x
+            qy = robot_transform.transform.rotation.y
+            qz = robot_transform.transform.rotation.z
+            qw = robot_transform.transform.rotation.w
             
-#             # Convert quaternion to yaw angle
-#             siny_cosp = 2.0 * (qw * qz + qx * qy)
-#             cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-#             yaw = math.atan2(siny_cosp, cosy_cosp)
+            # Convert quaternion to yaw angle
+            siny_cosp = 2.0 * (qw * qz + qx * qy)
+            cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
             
-#             # Place point 0.7m in front of robot
-#             point_map.point.x = x + 0.7 * math.cos(yaw)
-#             point_map.point.y = y + 0.7 * math.sin(yaw)
-#             point_map.point.z = 0.1  # Just above ground
+            # Place point 0.7m in front of robot
+            point_map.point.x = x + 0.7 * math.cos(yaw)
+            point_map.point.y = y + 0.7 * math.sin(yaw)
+            point_map.point.z = 0.1  # Just above ground
             
-#             self.get_logger().info(f"Using fallback position: x={point_map.point.x:.2f}, y={point_map.point.y:.2f}, z={point_map.point.z:.2f}")
+            self.get_logger().info(f"Using fallback position: x={point_map.point.x:.2f}, y={point_map.point.y:.2f}, z={point_map.point.z:.2f}")
             
-#             if object_id not in self.detected_hazards:
-#                 self.save_hazard_marker_position(object_id, hazard_name, point_map.point)
-#                 self.publish_marker(point_map.point, object_id, hazard_name)
-#             else:
-#                 self.get_logger().info(f"Object ID {object_id} already detected, skipping fallback marker")
+            if object_id not in self.detected_hazards:
+                self.save_hazard_marker_position(object_id, hazard_name, point_map.point)
+                self.publish_marker(point_map.point, object_id, hazard_name)
+            else:
+                self.get_logger().info(f"Object ID {object_id} already detected, skipping fallback marker")
         
-#         except Exception as e:
-#             self.get_logger().error(f"Fallback positioning also failed: {e}")
-#             self.publish_status(f"Could not place marker for {hazard_name}")
+        except Exception as e:
+            self.get_logger().error(f"Fallback positioning also failed: {e}")
+            self.publish_status(f"Could not place marker for {hazard_name}")
 
-#     # def find_object_callback(self, msg: ObjectsStamped):
-#     #     """
-#     #     Callback for find_object_2d detections.
-#     #     Processes detected objects, estimates their positions using laser data,
-#     #     and publishes markers at those positions.
-#     #     """
-#     #     if not msg.objects.data:
-#     #         self.get_logger().info("Empty detection message received.")
-#     #         self.publish_status("No hazards detected")
-#     #         return
+    # def find_object_callback(self, msg: ObjectsStamped):
+    #     """
+    #     Callback for find_object_2d detections.
+    #     Processes detected objects, estimates their positions using laser data,
+    #     and publishes markers at those positions.
+    #     """
+    #     if not msg.objects.data:
+    #         self.get_logger().info("Empty detection message received.")
+    #         self.publish_status("No hazards detected")
+    #         return
 
-#     #     # Check if we have laser data
-#     #     if self.last_laser_scan is None:
-#     #         self.get_logger().warning("No laser scan data available yet.")
-#     #         self.publish_status("Waiting for laser scan data")
-#     #         return
+    #     # Check if we have laser data
+    #     if self.last_laser_scan is None:
+    #         self.get_logger().warning("No laser scan data available yet.")
+    #         self.publish_status("Waiting for laser scan data")
+    #         return
 
-#     #     self.get_logger().info(f"Received {len(msg.objects.data) // 12} objects detected!")
+    #     self.get_logger().info(f"Received {len(msg.objects.data) // 12} objects detected!")
 
-#     #     for i in range(0, len(msg.objects.data), 12):
-#     #         object_id = int(msg.objects.data[i])
-#     #         hazard_name = HAZARD_ID_TO_NAME.get(object_id, "Unknown")
+    #     for i in range(0, len(msg.objects.data), 12):
+    #         object_id = int(msg.objects.data[i])
+    #         hazard_name = HAZARD_ID_TO_NAME.get(object_id, "Unknown")
             
-#     #         self.get_logger().info(f"Processing object with ID: {object_id}")
+    #         self.get_logger().info(f"Processing object with ID: {object_id}")
             
-#     #         # Extract bounding box info from the homography matrix
-#     #         h = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
+    #         # Extract bounding box info from the homography matrix
+    #         h = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
             
-#     #         # Get bounding box center and width
-#     #         bbox_x = h[0, 2]  # X coordinate from homography
-#     #         bbox_width = h[0, 0] / 10  # Width estimation from homography scale
+    #         # Get bounding box center and width
+    #         bbox_x = h[0, 2]  # X coordinate from homography
+    #         bbox_width = h[0, 0] / 10  # Width estimation from homography scale
             
-#     #         self.get_logger().info(f"Object bounding box x: {bbox_x}, width: {bbox_width}")
+    #         self.get_logger().info(f"Object bounding box x: {bbox_x}, width: {bbox_width}")
             
-#     #         # Convert to normalized position in image (0-1)
-#     #         image_width = 800.0  # Default width from find_object_2d
-#     #         if self.camera_intrinsics:
-#     #             image_width = self.camera_intrinsics['width']
+    #         # Convert to normalized position in image (0-1)
+    #         image_width = 800.0  # Default width from find_object_2d
+    #         if self.camera_intrinsics:
+    #             image_width = self.camera_intrinsics['width']
                 
-#     #         image_center_x = bbox_x + bbox_width / 2.0
-#     #         normalized_x = image_center_x / image_width
+    #         image_center_x = bbox_x + bbox_width / 2.0
+    #         normalized_x = image_center_x / image_width
             
-#     #         # Map normalized position to laser scan angle with offset
-#     #         angle = self.last_laser_scan.angle_min + normalized_x * (self.last_laser_scan.angle_max - self.last_laser_scan.angle_min) + 0.1
-#     #         index = int((angle - self.last_laser_scan.angle_min) / self.last_laser_scan.angle_increment)
+    #         # Map normalized position to laser scan angle with offset
+    #         angle = self.last_laser_scan.angle_min + normalized_x * (self.last_laser_scan.angle_max - self.last_laser_scan.angle_min) + 0.1
+    #         index = int((angle - self.last_laser_scan.angle_min) / self.last_laser_scan.angle_increment)
             
-#     #         # Check if index is within valid range
-#     #         if 0 <= index < len(self.last_laser_scan.ranges):
-#     #             distance = self.last_laser_scan.ranges[index]
+    #         # Check if index is within valid range
+    #         if 0 <= index < len(self.last_laser_scan.ranges):
+    #             distance = self.last_laser_scan.ranges[index]
                 
-#     #             # Validate distance
-#     #             if not np.isfinite(distance) or not (self.last_laser_scan.range_min <= distance <= self.last_laser_scan.range_max):
-#     #                 self.get_logger().warn(f'Invalid range for object {object_id}: {distance}m')
-#     #                 self.publish_status(f"Detected {hazard_name} but invalid distance")
-#     #                 continue
+    #             # Validate distance
+    #             if not np.isfinite(distance) or not (self.last_laser_scan.range_min <= distance <= self.last_laser_scan.range_max):
+    #                 self.get_logger().warn(f'Invalid range for object {object_id}: {distance}m')
+    #                 self.publish_status(f"Detected {hazard_name} but invalid distance")
+    #                 continue
                 
-#     #             # Create point in laser frame
-#     #             point_laser = PointStamped()
-#     #             point_laser.header.frame_id = self.last_laser_scan.header.frame_id
-#     #             # Use current time for transform to avoid timestamp issues
-#     #             point_laser.header.stamp = self.get_clock().now().to_msg()
-#     #             point_laser.point.x = distance * np.cos(angle)
-#     #             point_laser.point.y = distance * np.sin(angle)
-#     #             point_laser.point.z = 0.3  # Slightly elevated position for visibility
+    #             # Create point in laser frame
+    #             point_laser = PointStamped()
+    #             point_laser.header.frame_id = self.last_laser_scan.header.frame_id
+    #             # Use current time for transform to avoid timestamp issues
+    #             point_laser.header.stamp = self.get_clock().now().to_msg()
+    #             point_laser.point.x = distance * np.cos(angle)
+    #             point_laser.point.y = distance * np.sin(angle)
+    #             point_laser.point.z = 0.3  # Slightly elevated position for visibility
                 
-#     #             self.get_logger().info(f"Estimated position in laser frame: x={point_laser.point.x:.2f}, y={point_laser.point.y:.2f}")
+    #             self.get_logger().info(f"Estimated position in laser frame: x={point_laser.point.x:.2f}, y={point_laser.point.y:.2f}")
                 
-#     #             self.transform_and_place_marker(object_id, hazard_name, point_laser)
-#     #         else:
-#     #             self.get_logger().warn(f"Object position {index} is outside laser scan range [0, {len(self.last_laser_scan.ranges)-1}]")
-#     #             self.publish_status(f"Detected {hazard_name} but outside scan range")
+    #             self.transform_and_place_marker(object_id, hazard_name, point_laser)
+    #         else:
+    #             self.get_logger().warn(f"Object position {index} is outside laser scan range [0, {len(self.last_laser_scan.ranges)-1}]")
+    #             self.publish_status(f"Detected {hazard_name} but outside scan range")
 
 
-#     def transform_and_place_marker(self, object_id, hazard_name, point_laser):
-#         """Transform point and publish marker with improved error handling"""
-#         try:
-#             # Try to use the transform with latest available data
-#             if self.tf_buffer.can_transform('map', point_laser.header.frame_id, rclpy.time.Time(), 
-#                                         timeout=rclpy.duration.Duration(seconds=1.0)):
+    def transform_and_place_marker(self, object_id, hazard_name, point_laser):
+        """Transform point and publish marker with improved error handling"""
+        try:
+            # Try to use the transform with latest available data
+            if self.tf_buffer.can_transform('map', point_laser.header.frame_id, rclpy.time.Time(), 
+                                        timeout=rclpy.duration.Duration(seconds=1.0)):
                 
-#                 point_map = self.tf_buffer.transform(
-#                     point_laser, 
-#                     'map', 
-#                     timeout=rclpy.duration.Duration(seconds=1.0)
-#                 )
+                point_map = self.tf_buffer.transform(
+                    point_laser, 
+                    'map', 
+                    timeout=rclpy.duration.Duration(seconds=1.0)
+                )
                 
-#                 self.get_logger().info(f"Transformed to map: x={point_map.point.x:.2f}, y={point_map.point.y:.2f}, z={point_map.point.z:.2f}")
+                self.get_logger().info(f"Transformed to map: x={point_map.point.x:.2f}, y={point_map.point.y:.2f}, z={point_map.point.z:.2f}")
                 
-#                 # Apply position adjustment
-#                 point_map.point.y += 0.3
+                # Apply position adjustment
+                point_map.point.y += 0.3
                 
-#                 # Save and publish marker
-#                 if object_id not in self.detected_hazards:
-#                     self.save_hazard_marker_position(object_id, hazard_name, point_map.point)
-#                     self.publish_marker(point_map.point, object_id, hazard_name)
-#                 else:
-#                     self.get_logger().info(f"Object ID {object_id} already detected, skipping new marker")
+                # Save and publish marker
+                if object_id not in self.detected_hazards:
+                    self.save_hazard_marker_position(object_id, hazard_name, point_map.point)
+                    self.publish_marker(point_map.point, object_id, hazard_name)
+                else:
+                    self.get_logger().info(f"Object ID {object_id} already detected, skipping new marker")
                 
-#             else:
-#                 # FALLBACK: Use direct placement relative to robot base
-#                 try:
-#                     robot_transform = self.tf_buffer.lookup_transform(
-#                         'map',
-#                         'base_link',
-#                         rclpy.time.Time(),  # Use latest available transform
-#                         timeout=rclpy.duration.Duration(seconds=2.0)
-#                     )
+            else:
+                # FALLBACK: Use direct placement relative to robot base
+                try:
+                    robot_transform = self.tf_buffer.lookup_transform(
+                        'map',
+                        'base_link',
+                        rclpy.time.Time(),  # Use latest available transform
+                        timeout=rclpy.duration.Duration(seconds=2.0)
+                    )
                     
-#                     # Create a point in map frame directly
-#                     point_map = PointStamped()
-#                     point_map.header.frame_id = 'map'
-#                     point_map.header.stamp = self.get_clock().now().to_msg()
+                    # Create a point in map frame directly
+                    point_map = PointStamped()
+                    point_map.header.frame_id = 'map'
+                    point_map.header.stamp = self.get_clock().now().to_msg()
                     
-#                     # Extract robot position and orientation
-#                     x = robot_transform.transform.translation.x
-#                     y = robot_transform.transform.translation.y
-#                     z = robot_transform.transform.translation.z
+                    # Extract robot position and orientation
+                    x = robot_transform.transform.translation.x
+                    y = robot_transform.transform.translation.y
+                    z = robot_transform.transform.translation.z
                     
-#                     # Extract orientation quaternion for yaw
-#                     qx = robot_transform.transform.rotation.x
-#                     qy = robot_transform.transform.rotation.y
-#                     qz = robot_transform.transform.rotation.z
-#                     qw = robot_transform.transform.rotation.w
+                    # Extract orientation quaternion for yaw
+                    qx = robot_transform.transform.rotation.x
+                    qy = robot_transform.transform.rotation.y
+                    qz = robot_transform.transform.rotation.z
+                    qw = robot_transform.transform.rotation.w
                     
-#                     # Convert quaternion to yaw angle
-#                     siny_cosp = 2.0 * (qw * qz + qx * qy)
-#                     cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-#                     yaw = math.atan2(siny_cosp, cosy_cosp)
+                    # Convert quaternion to yaw angle
+                    siny_cosp = 2.0 * (qw * qz + qx * qy)
+                    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+                    yaw = math.atan2(siny_cosp, cosy_cosp)
                     
-#                     # Place point 0.5m in front of robot with offset
-#                     point_map.point.x = x + 0.5 * math.cos(yaw)
-#                     point_map.point.y = y + 0.5 * math.sin(yaw) + 0.3
-#                     point_map.point.z = z + 0.3
+                    # Place point 0.5m in front of robot with offset
+                    point_map.point.x = x + 0.5 * math.cos(yaw)
+                    point_map.point.y = y + 0.5 * math.sin(yaw) + 0.3
+                    point_map.point.z = z + 0.3
                     
-#                     self.get_logger().info(f"Using fallback position: x={point_map.point.x:.2f}, y={point_map.point.y:.2f}, z={point_map.point.z:.2f}")
+                    self.get_logger().info(f"Using fallback position: x={point_map.point.x:.2f}, y={point_map.point.y:.2f}, z={point_map.point.z:.2f}")
                     
-#                     # Only save/publish if this is a new detection
-#                     if object_id not in self.detected_hazards:
-#                         self.save_hazard_marker_position(object_id, hazard_name, point_map.point)
-#                         self.publish_marker(point_map.point, object_id, hazard_name)
-#                     else:
-#                         self.get_logger().info(f"Object ID {object_id} already detected, skipping new marker")
+                    # Only save/publish if this is a new detection
+                    if object_id not in self.detected_hazards:
+                        self.save_hazard_marker_position(object_id, hazard_name, point_map.point)
+                        self.publish_marker(point_map.point, object_id, hazard_name)
+                    else:
+                        self.get_logger().info(f"Object ID {object_id} already detected, skipping new marker")
                 
-#                 except Exception as e:
-#                     self.get_logger().error(f"Fallback positioning also failed: {e}")
-#                     self.publish_status(f"Detected {hazard_name} but couldn't position marker")
+                except Exception as e:
+                    self.get_logger().error(f"Fallback positioning also failed: {e}")
+                    self.publish_status(f"Detected {hazard_name} but couldn't position marker")
         
-#         except Exception as e:
-#             self.get_logger().error(f"Error in transformation: {e}")
-#             self.publish_status(f"Error processing {hazard_name}")
+        except Exception as e:
+            self.get_logger().error(f"Error in transformation: {e}")
+            self.publish_status(f"Error processing {hazard_name}")
 
-#     def save_hazard_marker_position(self, hazard_id, hazard_name, position):
-#         """
-#         Publishes the hazard marker position to a topic and tracks detections to avoid duplicates.
-#         """
-#         # Check if position is None
-#         if position is None:
-#             self.get_logger().warning(f"Cannot save hazard marker for ID {hazard_id}: Position is None")
-#             return
+    def save_hazard_marker_position(self, hazard_id, hazard_name, position):
+        """
+        Publishes the hazard marker position to a topic and tracks detections to avoid duplicates.
+        """
+        # Check if position is None
+        if position is None:
+            self.get_logger().warning(f"Cannot save hazard marker for ID {hazard_id}: Position is None")
+            return
             
-#         # Create a unique key for the hazard
-#         marker_key = f"{hazard_id}"
+        # Create a unique key for the hazard
+        marker_key = f"{hazard_id}"
         
-#         # Check if we've already detected this hazard (using approximate position)
-#         already_detected = False
-#         for key, pos in self.detected_hazards.items():
-#             if key == marker_key:
-#                 # Check if the positions are similar (within 0.2m)
-#                 dist = math.sqrt((pos[0] - position.x)**2 + 
-#                                 (pos[1] - position.y)**2 + 
-#                                 (pos[2] - position.z)**2)
-#                 if dist < 0.2:  # already detected within 20cm
-#                     already_detected = True
-#                     break
+        # Check if we've already detected this hazard (using approximate position)
+        already_detected = False
+        for key, pos in self.detected_hazards.items():
+            if key == marker_key:
+                # Check if the positions are similar (within 0.2m)
+                dist = math.sqrt((pos[0] - position.x)**2 + 
+                                (pos[1] - position.y)**2 + 
+                                (pos[2] - position.z)**2)
+                if dist < 0.2:  # already detected within 20cm
+                    already_detected = True
+                    break
 
-#         # Create the formatted data string for the coordinate
-#         coord_str = f"ID: {hazard_id}, {hazard_name}, x: {position.x:.4f}, y: {position.y:.4f}, z: {position.z:.4f}"
+        # Create the formatted data string for the coordinate
+        coord_str = f"ID: {hazard_id}, {hazard_name}, x: {position.x:.4f}, y: {position.y:.4f}, z: {position.z:.4f}"
         
-#         # Always publish to topic for real-time access
-#         coord_msg = String()
-#         coord_msg.data = coord_str
-#         self.coords_publisher.publish(coord_msg)
+        # Always publish to topic for real-time access
+        coord_msg = String()
+        coord_msg.data = coord_str
+        self.coords_publisher.publish(coord_msg)
         
-#         # If new detection, save it and provide more feedback
-#         if not already_detected:
-#             self.detected_hazards[marker_key] = (position.x, position.y, position.z)
+        # If new detection, save it and provide more feedback
+        if not already_detected:
+            self.detected_hazards[marker_key] = (position.x, position.y, position.z)
 
-#             # Print visibility indication
-#             terminal_output = f"NEW HAZARD MARKER DETECTED - ID: {hazard_id} ({hazard_name}) at position: x={position.x:.4f}, y={position.y:.4f}, z={position.z:.4f}"
-#             print("\n" + "="*80)
-#             print(terminal_output)
-#             print("="*80 + "\n")
-#             self.get_logger().info(f"New hazard detected: {coord_str}")
-#         else:
-#             self.get_logger().debug(f"Already detected hazard seen again: {coord_str}")
+            # Print visibility indication
+            terminal_output = f"NEW HAZARD MARKER DETECTED - ID: {hazard_id} ({hazard_name}) at position: x={position.x:.4f}, y={position.y:.4f}, z={position.z:.4f}"
+            print("\n" + "="*80)
+            print(terminal_output)
+            print("="*80 + "\n")
+            self.get_logger().info(f"New hazard detected: {coord_str}")
+        else:
+            self.get_logger().debug(f"Already detected hazard seen again: {coord_str}")
 
-#     def publish_marker(self, position_in_map, marker_id, marker_name):
-#         """Publishes a visualization_msgs/Marker."""
-#         marker_id_int = int(marker_id)
-#         self.get_logger().info(f"Publishing marker for {marker_name} (ID: {marker_id_int}) at map coordinates: x={position_in_map.x:.3f}, y={position_in_map.y:.3f}, z={position_in_map.z:.3f}")
+    def publish_marker(self, position_in_map, marker_id, marker_name):
+        """Publishes a visualization_msgs/Marker."""
+        marker_id_int = int(marker_id)
+        self.get_logger().info(f"Publishing marker for {marker_name} (ID: {marker_id_int}) at map coordinates: x={position_in_map.x:.3f}, y={position_in_map.y:.3f}, z={position_in_map.z:.3f}")
 
-#         marker = Marker()
-#         marker.header.frame_id = self.map_frame
-#         marker.header.stamp = self.get_clock().now().to_msg()
-#         marker.ns = "hazard_markers"
-#         marker.id = marker_id_int
-#         marker.type = Marker.SPHERE
-#         marker.action = Marker.ADD
-#         marker.pose.position = position_in_map
-#         marker.pose.orientation.w = 1.0
-#         marker.scale.x = 0.3
-#         marker.scale.y = 0.3
-#         marker.scale.z = 0.3
-#         marker.color.a = 1.0  # Fully opaque for better visibility
+        marker = Marker()
+        marker.header.frame_id = self.map_frame
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "hazard_markers"
+        marker.id = marker_id_int
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position = position_in_map
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.3
+        marker.scale.y = 0.3
+        marker.scale.z = 0.3
+        marker.color.a = 1.0  # Fully opaque for better visibility
 
-#         # Color assignment based on hazard type
-#         if "explosive" in marker_name.lower() or "flammable" in marker_name.lower() or "oxidizer" in marker_name.lower():
-#             marker.color.r = 1.0; marker.color.g = 0.0; marker.color.b = 0.0 # Red
-#         elif "gas" in marker_name.lower():
-#              marker.color.r = 0.0; marker.color.g = 0.0; marker.color.b = 1.0 # Blue
-#         elif "corrosive" in marker_name.lower():
-#              marker.color.r = 1.0; marker.color.g = 1.0; marker.color.b = 0.0 # Yellow
-#         elif "poison" in marker_name.lower() or "inhalation" in marker_name.lower():
-#              marker.color.r = 0.0; marker.color.g = 0.0; marker.color.b = 0.0 # Black
-#         elif "radioactive" in marker_name.lower():
-#              marker.color.r = 1.0; marker.color.g = 0.5; marker.color.b = 0.0 # Orange
-#         else:
-#             marker.color.r = 0.5; marker.color.g = 0.0; marker.color.b = 0.5 # Purple
+        # Color assignment based on hazard type
+        if "explosive" in marker_name.lower() or "flammable" in marker_name.lower() or "oxidizer" in marker_name.lower():
+            marker.color.r = 1.0; marker.color.g = 0.0; marker.color.b = 0.0 # Red
+        elif "gas" in marker_name.lower():
+             marker.color.r = 0.0; marker.color.g = 0.0; marker.color.b = 1.0 # Blue
+        elif "corrosive" in marker_name.lower():
+             marker.color.r = 1.0; marker.color.g = 1.0; marker.color.b = 0.0 # Yellow
+        elif "poison" in marker_name.lower() or "inhalation" in marker_name.lower():
+             marker.color.r = 0.0; marker.color.g = 0.0; marker.color.b = 0.0 # Black
+        elif "radioactive" in marker_name.lower():
+             marker.color.r = 1.0; marker.color.g = 0.5; marker.color.b = 0.0 # Orange
+        else:
+            marker.color.r = 0.5; marker.color.g = 0.0; marker.color.b = 0.5 # Purple
 
-#         # Set a long lifetime so markers stay visible
-#         marker.lifetime = rclpy.duration.Duration(seconds=3600).to_msg()
+        # Set a long lifetime so markers stay visible
+        marker.lifetime = rclpy.duration.Duration(seconds=3600).to_msg()
         
-#         self.get_logger().info(f"Sending marker to publisher...")
-#         self.marker_publisher.publish(marker)
-#         self.get_logger().info(f"Marker published successfully!")
+        self.get_logger().info(f"Sending marker to publisher...")
+        self.marker_publisher.publish(marker)
+        self.get_logger().info(f"Marker published successfully!")
 
-# def main(args=None):
-#     rclpy.init(args=args)
-#     node = HazardMarkerDetector()
-#     try:
-#         rclpy.spin(node)
-#     except KeyboardInterrupt:
-#         node.get_logger().info("Ctrl-C detected, shutting down node cleanly.")
-#     except Exception as e:
-#         node.get_logger().error(f"Node errored out: {e}")
-#     finally:
-#         node.get_logger().info("Destroying node...")
-#         node.destroy_node()
-#         rclpy.shutdown()
-#         print("HazardMarkerDetector node shutdown complete.")
+def main(args=None):
+    rclpy.init(args=args)
+    node = HazardMarkerDetector()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().info("Ctrl-C detected, shutting down node cleanly.")
+    except Exception as e:
+        node.get_logger().error(f"Node errored out: {e}")
+    finally:
+        node.get_logger().info("Destroying node...")
+        node.destroy_node()
+        rclpy.shutdown()
+        print("HazardMarkerDetector node shutdown complete.")
 
-# if __name__ == '__main__':
-#     main()
+if __name__ == '__main__':
+    main()
 
 ################################################
 
