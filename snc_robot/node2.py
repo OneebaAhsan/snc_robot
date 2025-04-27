@@ -14,7 +14,7 @@ from sensor_msgs.msg import LaserScan
 
 
 class ObjectLoggerFromStamped(Node):
-    def _init_(self):
+    def __init__(self):
         super()._init_('object_logger_from_stamped')
 
         self.create_subscription(ObjectsStamped, '/objectsStamped', self.object_callback, 10)
@@ -126,7 +126,7 @@ class ObjectLoggerFromStamped(Node):
             point = PointStamped()
             point.header.stamp = msg.header.stamp
 
-            point.header.frame_id = "oak_camera" 
+            point.header.frame_id = "camera_color_optical_frame" 
 
             # Patch wrong frame_id if needed
             # if point.header.frame_id == "oak_rgb_camera_optical_frame":
@@ -151,7 +151,7 @@ class ObjectLoggerFromStamped(Node):
 
             transform = self.tf_buffer.lookup_transform(
                 'map',               # TO
-                'oak_camera',        # FROM
+                'camera_color_optical_frame',        # FROM
                 # rclpy.time.Time(),
 
                 point.header.stamp,
@@ -201,7 +201,10 @@ def main(args=None):
     node.destroy_node()
     rclpy.shutdown()
 
-    
+if __name__ == '__main__':
+    main()    
+
+
 ########################### IF ABOVE DOESNT WORK, DEFAULT OF THIS #################
 
 # #!/usr/bin/env python3
