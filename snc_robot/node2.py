@@ -161,10 +161,14 @@ class HazardMarkerDetector(Node):
             self.publish_status("No hazards detected")
             return
 
-        # Check if we have laser data
+        # Check if we have laser data and camera intrinsics
         if self.last_laser_scan is None:
             self.get_logger().warning("No laser scan data available yet.")
             self.publish_status("Waiting for laser scan data")
+            return
+        if self.camera_intrinsics is None:
+            self.get_logger().warning("Camera intrinsics not available yet.")
+            self.publish_status("Waiting for camera intrinsics")
             return
 
         self.get_logger().info(f"Received {len(msg.objects.data) // 12} objects detected!")
@@ -178,49 +182,227 @@ class HazardMarkerDetector(Node):
             # Extract bounding box info from the homography matrix
             h = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
             
-            # Get bounding box center and width
-            bbox_x = h[0, 2]  # X coordinate from homography
-            bbox_width = h[0, 0] / 10  # Width estimation from homography scale
+            # Compute the bounding box center by applying the homography to the reference object's center
+            # Assume the reference object is centered at (0, 0) with a size of 100x100 pixels
+            ref_center = np.array([50, 50, 1])  # Homogeneous coordinates
+            image_center = h @ ref_center  # Apply homography
+            image_center = image_center / image_center[2]  # Normalize homogeneous coordinates
+            image_center_x = image_center[0]
+            image_center_y = image_center[1]
             
-            self.get_logger().info(f"Object bounding box x: {bbox_x}, width: {bbox_width}")
+            self.get_logger().info(f"Object center in image: x={image_center_x:.2f}, y={image_center_y:.2f}")
             
-            # Convert to normalized position in image (0-1)
-            image_width = 800.0  # Default width from find_object_2d
-            if self.camera_intrinsics:
-                image_width = self.camera_intrinsics['width']
-                
-            image_center_x = bbox_x + bbox_width / 2.0
-            normalized_x = image_center_x / image_width
+            # Use camera intrinsics to compute the angle
+            fx = self.camera_intrinsics['fx']
+            cx = self.camera_intrinsics['cx']
+            cy = self.camera_intrinsics['cy']
+            fy = self.camera_intrinsics['fy']
             
-            # Map normalized position to laser scan angle with offset
-            angle = self.last_laser_scan.angle_min + normalized_x * (self.last_laser_scan.angle_max - self.last_laser_scan.angle_min) + 0.1
-            index = int((angle - self.last_laser_scan.angle_min) / self.last_laser_scan.angle_increment)
+            try:
+                # Create a point in the camera frame (at a unit distance along the ray)
+                point_camera = PointStamped()
+                point_camera.header.frame_id = self.camera_optical_frame
+                point_camera.header.stamp = self.get_clock().now().to_msg()
+                point_camera.point.x = 1.0  # Unit distance along the ray
+                point_camera.point.y = (image_center_x - cx) / fx  # Using pinhole camera model
+                point_camera.point.z = (image_center_y - cy) / fy
+                
+                # Transform the point to the laser frame
+                point_laser_dir = self.tf_buffer.transform(
+                    point_camera,
+                    self.last_laser_scan.header.frame_id,
+                    timeout=rclpy.duration.Duration(seconds=1.0)
+                )
+                
+                # Compute the angle in the laser frame
+                angle = np.arctan2(point_laser_dir.point.y, point_laser_dir.point.x)
+                self.get_logger().info(f"Computed angle in laser frame: {angle:.2f} radians")
+                
+                # Map the angle to a laser scan index
+                index = int((angle - self.last_laser_scan.angle_min) / self.last_laser_scan.angle_increment)
+                
+                # Check if index is within valid range
+                if 0 <= index < len(self.last_laser_scan.ranges):
+                    # Get distance and apply a small correction factor
+                    raw_distance = self.last_laser_scan.ranges[index]
+                    distance = raw_distance * 0.95  # Apply a small correction factor
+                    
+                    # Validate distance
+                    if not np.isfinite(distance) or not (self.last_laser_scan.range_min <= distance <= self.last_laser_scan.range_max):
+                        self.get_logger().warn(f'Invalid range for object {object_id}: {distance}m')
+                        self.publish_status(f"Detected {hazard_name} but invalid distance")
+                        self.place_fallback_marker(object_id, hazard_name)
+                        continue
+                    
+                    # Create point in laser frame
+                    point_laser = PointStamped()
+                    point_laser.header.frame_id = self.last_laser_scan.header.frame_id
+                    point_laser.header.stamp = self.get_clock().now().to_msg()
+                    point_laser.point.x = distance * np.cos(angle)
+                    point_laser.point.y = distance * np.sin(angle)
+                    point_laser.point.z = 0.1  # Lower height for more accurate placement
+                    
+                    self.get_logger().info(f"Estimated position in laser frame: x={point_laser.point.x:.2f}, y={point_laser.point.y:.2f}")
+                    
+                    # Transform to map frame and publish marker
+                    try:
+                        if self.tf_buffer.can_transform('map', point_laser.header.frame_id, rclpy.time.Time(), 
+                                                    timeout=rclpy.duration.Duration(seconds=1.0)):
+                            
+                            point_map = self.tf_buffer.transform(
+                                point_laser, 
+                                'map', 
+                                timeout=rclpy.duration.Duration(seconds=1.0)
+                            )
+                            
+                            self.get_logger().info(f"Transformed to map: x={point_map.point.x:.2f}, y={point_map.point.y:.2f}, z={point_map.point.z:.2f}")
+                            
+                            # Save and publish marker
+                            if object_id not in self.detected_hazards:
+                                self.save_hazard_marker_position(object_id, hazard_name, point_map.point)
+                                self.publish_marker(point_map.point, object_id, hazard_name)
+                            else:
+                                self.get_logger().info(f"Object ID {object_id} already detected, skipping new marker")
+                        else:
+                            self.get_logger().warn(f"Transform to map frame not ready, using fallback")
+                            self.place_fallback_marker(object_id, hazard_name)
+                    
+                    except Exception as e:
+                        self.get_logger().error(f"Error in transformation: {e}")
+                        self.publish_status(f"Error processing {hazard_name}")
+                        self.place_fallback_marker(object_id, hazard_name)
+                else:
+                    self.get_logger().warn(f"Object position {index} is outside laser scan range [0, {len(self.last_laser_scan.ranges)-1}]")
+                    self.publish_status(f"Detected {hazard_name} but outside scan range")
+                    self.place_fallback_marker(object_id, hazard_name)
             
-            # Check if index is within valid range
-            if 0 <= index < len(self.last_laser_scan.ranges):
-                distance = self.last_laser_scan.ranges[index]
-                
-                # Validate distance
-                if not np.isfinite(distance) or not (self.last_laser_scan.range_min <= distance <= self.last_laser_scan.range_max):
-                    self.get_logger().warn(f'Invalid range for object {object_id}: {distance}m')
-                    self.publish_status(f"Detected {hazard_name} but invalid distance")
-                    continue
-                
-                # Create point in laser frame
-                point_laser = PointStamped()
-                point_laser.header.frame_id = self.last_laser_scan.header.frame_id
-                # Use current time for transform to avoid timestamp issues
-                point_laser.header.stamp = self.get_clock().now().to_msg()
-                point_laser.point.x = distance * np.cos(angle)
-                point_laser.point.y = distance * np.sin(angle)
-                point_laser.point.z = 0.3  # Slightly elevated position for visibility
-                
-                self.get_logger().info(f"Estimated position in laser frame: x={point_laser.point.x:.2f}, y={point_laser.point.y:.2f}")
-                
-                self.transform_and_place_marker(object_id, hazard_name, point_laser)
+            except Exception as e:
+                self.get_logger().error(f"Error in angle computation or transform: {e}")
+                self.publish_status(f"Error processing {hazard_name}")
+                self.place_fallback_marker(object_id, hazard_name)
+
+
+    def place_fallback_marker(self, object_id, hazard_name):
+        """Place marker at a fixed location in front of the robot as fallback"""
+        try:
+            # Get robot position in map
+            robot_transform = self.tf_buffer.lookup_transform(
+                'map',
+                'base_link',
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=1.0)
+            )
+            
+            # Create a point 1m in front of robot
+            point_map = PointStamped()
+            point_map.header.frame_id = 'map'
+            point_map.header.stamp = self.get_clock().now().to_msg()
+            
+            # Extract robot position
+            x = robot_transform.transform.translation.x
+            y = robot_transform.transform.translation.y
+            z = robot_transform.transform.translation.z
+            
+            # Extract orientation quaternion
+            qx = robot_transform.transform.rotation.x
+            qy = robot_transform.transform.rotation.y
+            qz = robot_transform.transform.rotation.z
+            qw = robot_transform.transform.rotation.w
+            
+            # Convert quaternion to yaw angle
+            siny_cosp = 2.0 * (qw * qz + qx * qy)
+            cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+            
+            # Place point 0.7m in front of robot
+            point_map.point.x = x + 0.7 * math.cos(yaw)
+            point_map.point.y = y + 0.7 * math.sin(yaw)
+            point_map.point.z = 0.1  # Just above ground
+            
+            self.get_logger().info(f"Using fallback position: x={point_map.point.x:.2f}, y={point_map.point.y:.2f}, z={point_map.point.z:.2f}")
+            
+            if object_id not in self.detected_hazards:
+                self.save_hazard_marker_position(object_id, hazard_name, point_map.point)
+                self.publish_marker(point_map.point, object_id, hazard_name)
             else:
-                self.get_logger().warn(f"Object position {index} is outside laser scan range [0, {len(self.last_laser_scan.ranges)-1}]")
-                self.publish_status(f"Detected {hazard_name} but outside scan range")
+                self.get_logger().info(f"Object ID {object_id} already detected, skipping fallback marker")
+        
+        except Exception as e:
+            self.get_logger().error(f"Fallback positioning also failed: {e}")
+            self.publish_status(f"Could not place marker for {hazard_name}")
+
+    # def find_object_callback(self, msg: ObjectsStamped):
+    #     """
+    #     Callback for find_object_2d detections.
+    #     Processes detected objects, estimates their positions using laser data,
+    #     and publishes markers at those positions.
+    #     """
+    #     if not msg.objects.data:
+    #         self.get_logger().info("Empty detection message received.")
+    #         self.publish_status("No hazards detected")
+    #         return
+
+    #     # Check if we have laser data
+    #     if self.last_laser_scan is None:
+    #         self.get_logger().warning("No laser scan data available yet.")
+    #         self.publish_status("Waiting for laser scan data")
+    #         return
+
+    #     self.get_logger().info(f"Received {len(msg.objects.data) // 12} objects detected!")
+
+    #     for i in range(0, len(msg.objects.data), 12):
+    #         object_id = int(msg.objects.data[i])
+    #         hazard_name = HAZARD_ID_TO_NAME.get(object_id, "Unknown")
+            
+    #         self.get_logger().info(f"Processing object with ID: {object_id}")
+            
+    #         # Extract bounding box info from the homography matrix
+    #         h = np.array(msg.objects.data[i + 2: i + 11]).reshape(3, 3)
+            
+    #         # Get bounding box center and width
+    #         bbox_x = h[0, 2]  # X coordinate from homography
+    #         bbox_width = h[0, 0] / 10  # Width estimation from homography scale
+            
+    #         self.get_logger().info(f"Object bounding box x: {bbox_x}, width: {bbox_width}")
+            
+    #         # Convert to normalized position in image (0-1)
+    #         image_width = 800.0  # Default width from find_object_2d
+    #         if self.camera_intrinsics:
+    #             image_width = self.camera_intrinsics['width']
+                
+    #         image_center_x = bbox_x + bbox_width / 2.0
+    #         normalized_x = image_center_x / image_width
+            
+    #         # Map normalized position to laser scan angle with offset
+    #         angle = self.last_laser_scan.angle_min + normalized_x * (self.last_laser_scan.angle_max - self.last_laser_scan.angle_min) + 0.1
+    #         index = int((angle - self.last_laser_scan.angle_min) / self.last_laser_scan.angle_increment)
+            
+    #         # Check if index is within valid range
+    #         if 0 <= index < len(self.last_laser_scan.ranges):
+    #             distance = self.last_laser_scan.ranges[index]
+                
+    #             # Validate distance
+    #             if not np.isfinite(distance) or not (self.last_laser_scan.range_min <= distance <= self.last_laser_scan.range_max):
+    #                 self.get_logger().warn(f'Invalid range for object {object_id}: {distance}m')
+    #                 self.publish_status(f"Detected {hazard_name} but invalid distance")
+    #                 continue
+                
+    #             # Create point in laser frame
+    #             point_laser = PointStamped()
+    #             point_laser.header.frame_id = self.last_laser_scan.header.frame_id
+    #             # Use current time for transform to avoid timestamp issues
+    #             point_laser.header.stamp = self.get_clock().now().to_msg()
+    #             point_laser.point.x = distance * np.cos(angle)
+    #             point_laser.point.y = distance * np.sin(angle)
+    #             point_laser.point.z = 0.3  # Slightly elevated position for visibility
+                
+    #             self.get_logger().info(f"Estimated position in laser frame: x={point_laser.point.x:.2f}, y={point_laser.point.y:.2f}")
+                
+    #             self.transform_and_place_marker(object_id, hazard_name, point_laser)
+    #         else:
+    #             self.get_logger().warn(f"Object position {index} is outside laser scan range [0, {len(self.last_laser_scan.ranges)-1}]")
+    #             self.publish_status(f"Detected {hazard_name} but outside scan range")
+
 
     def transform_and_place_marker(self, object_id, hazard_name, point_laser):
         """Transform point and publish marker with improved error handling"""
